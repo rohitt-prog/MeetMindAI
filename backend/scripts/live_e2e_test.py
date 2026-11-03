@@ -134,8 +134,24 @@ def run_live_e2e_verification():
     print(f"  - Vague Answer Resolved status: {matching_vague.get('resolved')} (Expected: False)")
     print(f"  - Clarification Required flag: {vague_analysis.get('clarification_required')}")
 
+    # Step 7: Test PDF Report Export
+    print("\n[Step 7] Generating PDF Report from Meeting Analysis...")
+    pdf_res = client.post(
+        "/api/meetings/export/pdf",
+        json={
+            "title": "Milestone Release Blocker Sync",
+            "transcript": SAMPLE_TRANSCRIPT,
+            "analysis": updated_analysis,
+        },
+    )
+    assert pdf_res.status_code == 200, f"PDF export failed with status {pdf_res.status_code}"
+    assert pdf_res.headers["content-type"] == "application/pdf"
+    assert pdf_res.content.startswith(b"%PDF-")
+    print(f"✓ PDF Report Generated Successfully! Size: {len(pdf_res.content)} bytes")
+    print(f"  - Download Header: {pdf_res.headers.get('content-disposition')}")
+
     print("\n" + "=" * 70)
-    print("✓ ALL LIVE END-TO-END GEMINI TESTS PASSED SUCCESSFULLY!")
+    print("✓ ALL LIVE END-TO-END WORKFLOW VERIFICATIONS PASSED SUCCESSFULLY!")
     print("=" * 70)
     return True
 

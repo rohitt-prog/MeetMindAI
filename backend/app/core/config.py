@@ -5,7 +5,7 @@ import json
 
 class Settings(BaseSettings):
     APP_NAME: str = "MeetMind AI"
-    APP_VERSION: str = "0.2.0"
+    APP_VERSION: str = "1.0.0"
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"
     

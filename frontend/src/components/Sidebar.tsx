@@ -10,8 +10,7 @@ import {
   XCircle,
   Clock,
   Sun,
-  Moon,
-  Database
+  Moon
 } from 'lucide-react';
 import { BackendConnectionState, MeetingListItem } from '../types';
 import { RecentMeetingsList } from './RecentMeetingsList';
@@ -67,8 +66,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
         <span className="px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20 rounded-md flex items-center gap-1">
-          <Database className="w-2.5 h-2.5" />
-          <span>Phase 6</span>
+          <Sparkles className="w-2.5 h-2.5" />
+          <span>v1.0 Ready</span>
         </span>
       </div>
 

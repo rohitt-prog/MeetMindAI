@@ -252,3 +252,4 @@ def test_sanitize_filename_edge_cases():
     # 5. Empty title and empty meeting_id
     fn5 = pdf_service.sanitize_filename("   ", "")
     assert fn5 == "meetmind_meeting_report.pdf"
+
