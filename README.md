@@ -5,7 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript%20%7C%20Python-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Styling-Tailwind%20CSS-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%20API-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/)
-[![Phase](https://img.shields.io/badge/Phase-3%3A%20Ambiguity%20Detection%20%26%20Clarification-indigo)](README.md)
+[![Phase](https://img.shields.io/badge/Phase-4%3A%20Frontend%20UI%20Implementation-indigo)](README.md)
 
 **MeetMind AI** is an intelligent assistant engineered to bridge the gap between spoken or transcribed meeting conversations and structured execution. It converts raw, unstructured meeting transcripts into actionable summaries, decisions, explicit task ownership, strict deadlines, and clarifying questions.
 
@@ -38,12 +38,12 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 
 ## 3. Technology Stack
 
-### Frontend (Implemented in Phase 1)
+### Frontend (Implemented in Phase 1 & 4)
 - **Framework**: React 18 with Vite
 - **Language**: TypeScript
-- **Styling**: Tailwind CSS (Dark navy/slate theme with indigo accents)
+- **Styling**: Tailwind CSS (Modern productivity UI with light/dark theme toggle, subtle borders, indigo accent)
 - **Icons**: Lucide React
-- **HTTP Client**: Centralized Fetch API client (`apiService`)
+- **HTTP Client**: Centralized Fetch API client (`apiService`) with robust error classification
 
 ### Backend (Implemented in Phase 1, 2 & 3)
 - **Framework**: Python 3.11+ with FastAPI
@@ -54,8 +54,9 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 - **Testing**: Pytest & HTTPX TestClient with mocked Gemini calls (19 automated tests)
 - **Middleware**: Fast CORS middleware configured for Vite development servers
 
-### Data Layer (Reserved for Future Phase)
-- **Database (Phase 4)**: MongoDB for persistent meeting records and action items
+### Data & Export Layers (Planned for Future Phases)
+- **Database (Phase 6)**: MongoDB for persistent meeting records and action items
+- **Export & Reporting (Phase 7)**: PDF / Markdown summary exports
 
 ---
 
@@ -66,15 +67,18 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 | **Workspace & Repository Scaffold** | Completed | Clean monorepo structure separating `frontend/`, `backend/`, and `docs/`. |
 | **Backend REST Health Check** | Completed | `GET /api/health` returns status and application metadata with CORS support. |
 | **Backend Settings & Validation** | Completed | Pydantic v2 configuration management with environment variable loading. |
-| **Frontend Dashboard UI** | Completed | Modern dark navy/slate dashboard with sidebar, stats cards, and meeting input. |
 | **Client-Server Handshake** | Completed | Centralized `apiService` pings `/api/health` and displays real-time connection status. |
-| **Transcript Input Form** | Completed | Title, transcript textarea with word/character counter, and sample transcript loader. |
 | **Gemini AI Backend Integration** | Completed | `POST /api/meetings/analyze` converts transcripts into structured JSON via `google-genai`. |
 | **Anti-Hallucination Guardrails** | Completed | Extraction rules prevent inventing owners/deadlines; uses `null` for unassigned fields. |
 | **Ambiguity Detection Engine** | Completed | Detects and tags ambiguities across ownership, deadlines, task scope, and proposals. |
-| **Interactive Clarification Workflow** | Completed | `POST /api/meetings/clarify` updates analysis based on submitted clarification answers. |
-| **MongoDB Database Storage** | *Planned (Phase 4)* | Persistent storage for meeting archives, action item statuses, and user settings. |
-| **Frontend Clarification UI** | *Planned (Phase 4)* | Interactive clarification Q&A cards directly in the React dashboard. |
+| **Backend Clarification Endpoint** | Completed | `POST /api/meetings/clarify` updates analysis based on submitted clarification answers. |
+| **Transcript Workspace (UI)** | Completed | Clean workspace with title input, live char/word counters, sample loaders, and validation. |
+| **Analysis Loading State (UI)** | Completed | Multi-step progress indicator providing clear feedback during AI analysis and re-evaluation. |
+| **Structured Results View (UI)** | Completed | Executive summary, discussion points, confirmed decisions, and action items with status tags. |
+| **Interactive Clarification Cards (UI)** | Completed | In-place Q&A cards with category badges, input fields, and seamless re-evaluation without data loss. |
+| **Light & Dark Theme Toggle (UI)** | Completed | Clean SaaS light theme (default) and dark mode with persistent `localStorage` synchronization. |
+| **MongoDB Database Storage** | *Planned (Phase 6)* | Persistent storage for meeting archives, action item statuses, and history. |
+| **PDF & Markdown Export** | *Planned (Phase 7)* | Downloadable summaries and structured meeting action plans. |
 
 ---
 
@@ -130,11 +134,14 @@ meetmind-ai/
 │   ├── public/                 # Static assets
 │   ├── src/
 │   │   ├── components/         # Reusable UI components
-│   │   │   ├── EmptyState.tsx
-│   │   │   ├── Header.tsx
-│   │   │   ├── NewMeetingSection.tsx
-│   │   │   ├── Sidebar.tsx
-│   │   │   └── StatsCard.tsx
+│   │   │   ├── AnalysisLoadingState.tsx # Step-by-step processing state
+│   │   │   ├── AnalysisResults.tsx      # Executive summaries, actions & decisions
+│   │   │   ├── ClarificationSection.tsx # In-place ambiguity resolution cards
+│   │   │   ├── EmptyState.tsx           # Initial placeholder & guidance
+│   │   │   ├── Header.tsx               # Top navigation & backend status pill
+│   │   │   ├── Sidebar.tsx              # Sidebar navigation & theme toggle
+│   │   │   ├── StatsCard.tsx            # Key metric summary indicators
+│   │   │   └── TranscriptWorkspace.tsx  # Input textarea, counters & presets
 │   │   ├── pages/              # View pages (Dashboard)
 │   │   │   └── Dashboard.tsx
 │   │   ├── services/           # Centralized API service
@@ -457,8 +464,22 @@ The frontend dashboard will be available at `http://localhost:5173`.
   - Interactive clarification re-evaluation endpoint (`POST /api/meetings/clarify`)
   - Safe, non-destructive updating of action items and decisions
   - Comprehensive test suite covering 19 test scenarios
-- [ ] **Phase 4: Database & UI Clarification Integration**
-  - MongoDB connection and schema definitions
-  - Meeting transcript archiving and retrieval
-  - Action item status tracking (pending, completed, blocked)
-  - Interactive clarification Q&A cards directly in the React frontend
+- [x] **Phase 4: Frontend UI Implementation**
+  - Full-featured transcript input workspace with title, character/word counters, sample loaders, and input clearing
+  - Multi-step loading state with visual progress steps during analysis and re-evaluation
+  - Structured results rendering: Executive summary, discussion points, confirmed decisions, and action items
+  - Action items with explicit status tags and clear indicators for unassigned owners and missing deadlines
+  - Interactive clarification workflow with categorized ambiguity cards (`ownership`, `deadline`, `task_scope`, `decision_vs_suggestion`, `missing_context`)
+  - Seamless in-place re-evaluation via `POST /api/meetings/clarify` with inline error recovery and state preservation
+  - Dual theme architecture: clean, high-contrast light productivity theme (default) + dark theme with `localStorage` persistence
+  - Live backend heartbeat connectivity pill and responsive multi-device navigation
+- [ ] **Phase 5: Advanced AI Features & Audio Ingestion**
+  - Audio file transcription and speaker diarization
+  - Multi-meeting comparison and agenda alignment
+- [ ] **Phase 6: MongoDB Persistence & History**
+  - MongoDB connection, ODM models, and database migrations
+  - Historical meeting transcript archiving and search
+  - Action item status tracking (pending, completed, blocked) and editing
+- [ ] **Phase 7: Export & Reporting**
+  - Executive summary and action plan PDF generation
+  - Markdown and JSON export options for productivity tool integrations

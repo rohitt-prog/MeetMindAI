@@ -1,17 +1,26 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   Users, 
   CheckSquare, 
   HelpCircle, 
   Terminal,
   Activity,
-  Layers
+  Layers,
+  Sparkles
 } from 'lucide-react';
 import { Header } from '../components/Header';
 import { StatsCard } from '../components/StatsCard';
-import { NewMeetingSection } from '../components/NewMeetingSection';
+import { TranscriptWorkspace } from '../components/TranscriptWorkspace';
+import { AnalysisLoadingState } from '../components/AnalysisLoadingState';
+import { AnalysisResults } from '../components/AnalysisResults';
 import { EmptyState } from '../components/EmptyState';
-import { BackendConnectionState } from '../types';
+import { 
+  BackendConnectionState, 
+  AnalysisState, 
+  MeetingAnalysisRequest, 
+  ClarificationAnswer 
+} from '../types';
+import { apiService } from '../services/api';
 
 interface DashboardProps {
   connectionState: BackendConnectionState;
@@ -24,121 +33,253 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const newMeetingInputRef = useRef<HTMLInputElement>(null);
 
+  const [currentTitle, setCurrentTitle] = useState<string | null>(null);
+  const [analysisState, setAnalysisState] = useState<AnalysisState>({
+    isLoading: false,
+    isClarifying: false,
+    data: null,
+    error: null,
+    clarificationError: null,
+    lastAnalyzedAt: null,
+  });
+
   const handleFocusNewMeeting = () => {
-    newMeetingInputRef.current?.focus();
-    newMeetingInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (analysisState.data) {
+      setAnalysisState((prev) => ({ ...prev, data: null, error: null, clarificationError: null }));
+    }
+    setTimeout(() => {
+      newMeetingInputRef.current?.focus();
+      newMeetingInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
   };
 
+  const handleAnalyze = async (request: MeetingAnalysisRequest) => {
+    setAnalysisState((prev) => ({
+      ...prev,
+      isLoading: true,
+      error: null,
+      clarificationError: null,
+    }));
+    setCurrentTitle(request.title || null);
+
+    try {
+      const result = await apiService.analyzeMeeting(request);
+      setAnalysisState({
+        isLoading: false,
+        isClarifying: false,
+        data: result,
+        error: null,
+        clarificationError: null,
+        lastAnalyzedAt: new Date(),
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to analyze meeting transcript.';
+      setAnalysisState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: message,
+      }));
+    }
+  };
+
+  const handleClarify = async (answers: ClarificationAnswer[]) => {
+    if (!analysisState.data) return;
+
+    setAnalysisState((prev) => ({
+      ...prev,
+      isClarifying: true,
+      clarificationError: null,
+    }));
+
+    try {
+      const updated = await apiService.clarifyMeeting({
+        analysis: analysisState.data,
+        answers,
+      });
+
+      setAnalysisState((prev) => ({
+        ...prev,
+        isClarifying: false,
+        data: updated,
+        clarificationError: null,
+      }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to resolve clarification answers.';
+      // Note: do not lose the existing analysis data on clarification failure!
+      setAnalysisState((prev) => ({
+        ...prev,
+        isClarifying: false,
+        clarificationError: message,
+      }));
+    }
+  };
+
+  const handleResetMeeting = () => {
+    setAnalysisState({
+      isLoading: false,
+      isClarifying: false,
+      data: null,
+      error: null,
+      clarificationError: null,
+      lastAnalyzedAt: null,
+    });
+    setCurrentTitle(null);
+  };
+
+  // Metrics computation
+  const analysisData = analysisState.data;
+  const unresolvedCount = analysisData
+    ? analysisData.clarifications.filter((c) => !c.resolved).length
+    : 0;
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-950">
+    <div className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-50 dark:bg-slate-950 transition-colors">
       {/* Header */}
       <Header 
         onNewMeetingClick={handleFocusNewMeeting} 
         connectionState={connectionState}
+        hasActiveAnalysis={!!analysisData}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 p-8 max-w-7xl w-full mx-auto space-y-8">
-        {/* Welcome Section */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 p-8 shadow-sm">
-          <div className="relative z-10 max-w-3xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-medium mb-3">
-              <Layers className="w-3.5 h-3.5" />
-              <span>Phase 1: Project Foundation & Handshake Active</span>
-            </div>
-
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100">
-              Welcome to MeetMind AI
-            </h1>
-            <p className="mt-2 text-sm text-slate-300 leading-relaxed">
-              AI-Powered Meeting-to-Action Assistant designed to transform messy meeting transcripts into structured summaries, key discussion points, explicit action items, deadlines, and proactive clarification questions.
-            </p>
-
-            <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
-              <div className="flex items-center gap-1.5">
-                <Terminal className="w-4 h-4 text-slate-400" />
-                <span>Backend: FastAPI + Uvicorn</span>
+      <main className="flex-1 p-5 sm:p-8 max-w-7xl w-full mx-auto space-y-6">
+        {/* Welcome Section (Shown before analysis) */}
+        {!analysisData && !analysisState.isLoading && (
+          <div className="relative overflow-hidden rounded-2xl bg-white dark:bg-gradient-to-r dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/40 border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-2xs transition-colors">
+            <div className="relative z-10 max-w-3xl">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20 text-indigo-700 dark:text-indigo-400 text-xs font-semibold mb-3">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>AI Meeting Intelligence</span>
               </div>
-              <span>&bull;</span>
-              <div className="flex items-center gap-1.5">
-                <Activity className="w-4 h-4 text-slate-400" />
-                <span>Client: React + Vite + TypeScript</span>
+
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+                Transform Meeting Transcripts into Structured Action
+              </h1>
+              <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                MeetMind AI analyzes meeting dialogues to extract executive summaries, verified decisions, explicit deliverables, and proactively identifies ambiguities in ownership or deadlines.
+              </p>
+
+              <div className="mt-4 flex flex-wrap items-center gap-3 sm:gap-4 text-[11px] text-slate-500 dark:text-slate-400">
+                <div className="flex items-center gap-1.5">
+                  <Terminal className="w-3.5 h-3.5 text-slate-400" />
+                  <span>FastAPI + Uvicorn</span>
+                </div>
+                <span>&bull;</span>
+                <div className="flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Gemini 2.5 Flash</span>
+                </div>
+                <span>&bull;</span>
+                <div className="flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Ambiguity Detection</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Backend Connection Diagnostics Bar if disconnected */}
         {!connectionState.isConnected && !connectionState.isLoading && (
-          <div className="p-4 rounded-xl bg-rose-950/30 border border-rose-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="space-y-0.5">
-              <p className="font-semibold text-rose-300">
+              <p className="font-semibold text-rose-800 dark:text-rose-300">
                 Backend Service Unreachable
               </p>
-              <p className="text-rose-400/90">
-                Ensure the FastAPI backend is running on <code className="bg-rose-950/80 px-1 py-0.5 rounded text-[11px]">http://localhost:8000</code>.
+              <p className="text-rose-600 dark:text-rose-400">
+                Ensure the FastAPI backend is running on <code className="bg-rose-100 dark:bg-rose-950/80 px-1 py-0.5 rounded text-[11px] font-mono">http://localhost:8000</code>.
               </p>
             </div>
             <button
               onClick={onRefreshHealth}
-              className="self-start sm:self-auto px-3.5 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-900 text-rose-200 font-medium transition-colors border border-rose-700/60"
+              className="self-start sm:self-auto px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-medium transition-colors"
             >
               Retry Connection
             </button>
           </div>
         )}
 
-        {/* Meeting Statistics Cards */}
+        {/* Metrics Grid */}
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              System Overview & Metrics
+            <h2 className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              {analysisData ? 'Active Meeting Intelligence Metrics' : 'System Overview & Metrics'}
             </h2>
-            <span className="text-[11px] text-slate-400">Initialized State</span>
+            <span className="text-[11px] text-slate-400">
+              {analysisData ? 'Live Analysis' : 'Session Ready'}
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <StatsCard
-              title="Total Meetings"
-              value={0}
-              label="recorded"
-              icon={Users}
-              badge="Phase 1 Ready"
-              iconColor="text-indigo-400"
-            />
-            <StatsCard
-              title="Action Items"
-              value={0}
-              label="assigned"
+              title={analysisData ? 'Extracted Action Items' : 'Total Meetings'}
+              value={analysisData ? analysisData.action_items.length : 0}
+              label={analysisData ? 'tasks mapped' : 'in session'}
               icon={CheckSquare}
-              badge="Phase 1 Ready"
-              iconColor="text-emerald-400"
+              badge={analysisData ? 'Verified Tasks' : 'Session'}
+              iconColor="text-indigo-600 dark:text-indigo-400"
             />
             <StatsCard
-              title="Pending Clarifications"
-              value={0}
-              label="questions"
+              title={analysisData ? 'Confirmed Decisions' : 'Action Items'}
+              value={analysisData ? analysisData.decisions.length : 0}
+              label={analysisData ? 'agreed points' : 'ready to map'}
+              icon={Users}
+              badge={analysisData ? 'Explicit Decisions' : 'Ready'}
+              iconColor="text-emerald-600 dark:text-emerald-400"
+            />
+            <StatsCard
+              title={analysisData ? 'Ambiguities Detected' : 'Pending Clarifications'}
+              value={analysisData ? unresolvedCount : 0}
+              label={analysisData ? 'items pending' : 'zero ambiguities'}
               icon={HelpCircle}
-              badge="Phase 1 Ready"
-              iconColor="text-amber-400"
+              badge={unresolvedCount > 0 ? 'Action Needed' : 'Clear'}
+              iconColor={unresolvedCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}
+              badgeColor={unresolvedCount > 0 ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300' : undefined}
             />
           </div>
         </div>
 
-        {/* New Meeting Input Section */}
-        <NewMeetingSection inputRef={newMeetingInputRef} />
+        {/* Dynamic Workspace State */}
+        {analysisState.isLoading ? (
+          <AnalysisLoadingState
+            statusMessage="Gemini AI is parsing the transcript, assigning owners and deadlines, and detecting ambiguities..."
+            isClarifying={false}
+          />
+        ) : analysisData ? (
+          <AnalysisResults
+            analysis={analysisData}
+            meetingTitle={currentTitle}
+            onClarify={handleClarify}
+            isClarifying={analysisState.isClarifying}
+            clarificationError={analysisState.clarificationError}
+            onClearClarificationError={() =>
+              setAnalysisState((prev) => ({ ...prev, clarificationError: null }))
+            }
+            onResetMeeting={handleResetMeeting}
+          />
+        ) : (
+          <div className="space-y-6">
+            <TranscriptWorkspace
+              inputRef={newMeetingInputRef}
+              onAnalyze={handleAnalyze}
+              isLoading={analysisState.isLoading}
+              error={analysisState.error}
+              onClearError={() =>
+                setAnalysisState((prev) => ({ ...prev, error: null }))
+              }
+            />
 
-        {/* Recent Meeting History / Empty State */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Meeting Archive
-            </h2>
-            <span className="text-[11px] text-slate-400">0 Items in Database</span>
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  Session Status
+                </h2>
+                <span className="text-[11px] text-slate-400">0 Items in Memory</span>
+              </div>
+              <EmptyState onNewMeetingClick={handleFocusNewMeeting} />
+            </div>
           </div>
-
-          <EmptyState onNewMeetingClick={handleFocusNewMeeting} />
-        </div>
+        )}
       </main>
     </div>
   );
