@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Calendar, 
   Clock, 
@@ -9,9 +9,11 @@ import {
   ChevronRight, 
   Plus, 
   CheckCircle2,
-  FolderOpen
+  FolderOpen,
+  Download
 } from 'lucide-react';
 import { MeetingListItem } from '../types';
+import { apiService } from '../services/api';
 
 interface RecentMeetingsListProps {
   meetings: MeetingListItem[];
@@ -34,6 +36,21 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
   onNewMeetingClick,
   compact = false,
 }) => {
+  const [exportingId, setExportingId] = useState<string | null>(null);
+
+  const handleQuickExport = async (e: React.MouseEvent, meetingId: string) => {
+    e.stopPropagation();
+    setExportingId(meetingId);
+    try {
+      const { blob, filename } = await apiService.exportSavedMeetingPdf(meetingId);
+      apiService.downloadBlob(blob, filename);
+    } catch (err: unknown) {
+      console.error('Failed to export PDF:', err);
+    } finally {
+      setExportingId(null);
+    }
+  };
+
   const formatTime = (isoString?: string) => {
     if (!isoString) return '';
     try {
@@ -224,17 +241,32 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
                     </span>
                   </div>
 
-                  {m.clarification_required ? (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
-                      <HelpCircle className="w-2.5 h-2.5" />
-                      {m.unresolved_clarifications_count} open
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60">
-                      <CheckCircle2 className="w-2.5 h-2.5" />
-                      Clear
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {m.clarification_required ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
+                        <HelpCircle className="w-2.5 h-2.5" />
+                        {m.unresolved_clarifications_count} open
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60">
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        Clear
+                      </span>
+                    )}
+
+                    <button
+                      onClick={(e) => handleQuickExport(e, m.meeting_id)}
+                      disabled={exportingId === m.meeting_id}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                      title="Download PDF report for this meeting"
+                    >
+                      {exportingId === m.meeting_id ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             );

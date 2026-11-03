@@ -96,4 +96,5 @@ def root():
         "analyze": f"{settings.API_V1_STR}/meetings/analyze",
         "clarify": f"{settings.API_V1_STR}/meetings/clarify",
         "meetings": f"{settings.API_V1_STR}/meetings",
+        "export_pdf": f"{settings.API_V1_STR}/meetings/export/pdf",
     }

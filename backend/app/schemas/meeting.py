@@ -171,3 +171,23 @@ class MeetingDetailResponse(BaseModel):
     updated_at: str = Field(..., description="ISO 8601 last update timestamp")
     analysis: MeetingAnalysisResponse = Field(..., description="Structured meeting analysis")
     answers_history: List[dict] = Field(default_factory=list, description="Historical clarification answers audit log")
+
+class MeetingPdfExportRequest(BaseModel):
+    title: Optional[str] = Field(
+        default=None,
+        description="Optional meeting title",
+        json_schema_extra={"example": "Mobile App Redesign Sync"}
+    )
+    transcript: Optional[str] = Field(
+        default=None,
+        description="Optional meeting transcript",
+        json_schema_extra={"example": "Sarah: Let's review the blockers for the milestone release..."}
+    )
+    analysis: MeetingAnalysisResponse = Field(
+        ...,
+        description="Structured meeting analysis object to render into the report"
+    )
+    answers_history: Optional[List[dict]] = Field(
+        default_factory=list,
+        description="Optional historical clarification answers audit log"
+    )

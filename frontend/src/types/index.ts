@@ -82,6 +82,17 @@ export interface MeetingDetailResponse {
   }>;
 }
 
+export interface MeetingPdfExportRequest {
+  title?: string | null;
+  transcript?: string | null;
+  analysis: MeetingAnalysisResponse;
+  answers_history?: Array<{
+    clarification_id: string;
+    answer: string;
+    timestamp: string;
+  }>;
+}
+
 export interface AnalysisState {
   isLoading: boolean;
   isClarifying: boolean;

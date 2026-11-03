@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 import logging
 
 from app.schemas.meeting import (
@@ -8,6 +8,7 @@ from app.schemas.meeting import (
     MeetingClarificationRequest,
     MeetingDetailResponse,
     MeetingListItem,
+    MeetingPdfExportRequest,
 )
 from app.services.gemini_service import (
     gemini_service,
@@ -20,6 +21,7 @@ from app.services.firebase_service import (
     FirebaseNotFoundError,
     FirebaseOperationError,
 )
+from app.services.pdf_service import pdf_service
 
 logger = logging.getLogger("meetmind-ai.meetings")
 
@@ -132,6 +134,52 @@ def list_recent_meetings(
         )
 
 
+@router.post(
+    "/export/pdf",
+    summary="Export Meeting Report as PDF",
+    description="Generates a downloadable publication-grade PDF report from the provided meeting analysis and transcript.",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "Returns the generated meeting report PDF as a binary attachment.",
+        }
+    },
+)
+def export_meeting_pdf(request: MeetingPdfExportRequest) -> Response:
+    """
+    Endpoint to generate and stream a PDF meeting report from the provided analysis payload.
+    Used for unsaved workspace meetings or currently active analyses.
+    """
+    try:
+        pdf_bytes = pdf_service.generate_meeting_pdf(
+            analysis=request.analysis,
+            title=request.title,
+            transcript=request.transcript,
+            meeting_id=request.analysis.meeting_id,
+            answers_history=request.answers_history,
+        )
+        filename = pdf_service.sanitize_filename(
+            title=request.title,
+            meeting_id=request.analysis.meeting_id,
+        )
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "application/pdf",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate meeting report PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate meeting report PDF: {str(e)}",
+        )
+
+
 @router.get(
     "/{meeting_id}",
     response_model=MeetingDetailResponse,
@@ -172,6 +220,72 @@ def get_meeting_details(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve meeting '{meeting_id}': {str(e)}",
+        )
+
+
+@router.get(
+    "/{meeting_id}/export/pdf",
+    summary="Export Saved Meeting Report as PDF",
+    description="Fetches a persisted meeting from Cloud Firestore and compiles it into a downloadable PDF report.",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "Returns the generated meeting report PDF as a binary attachment.",
+        }
+    },
+)
+def export_saved_meeting_pdf(meeting_id: str) -> Response:
+    """
+    Endpoint to retrieve a saved meeting from Firestore and generate a downloadable PDF report.
+    """
+    if not firebase_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase Firestore is not configured. Please configure FIREBASE_PROJECT_ID and credentials in backend/.env.",
+        )
+
+    try:
+        meeting = firebase_service.get_meeting(meeting_id=meeting_id)
+        pdf_bytes = pdf_service.generate_meeting_pdf(
+            analysis=meeting.analysis,
+            title=meeting.title,
+            transcript=meeting.transcript,
+            meeting_id=meeting.meeting_id,
+            created_at=meeting.created_at,
+            updated_at=meeting.updated_at,
+            answers_history=meeting.answers_history,
+        )
+        filename = pdf_service.sanitize_filename(
+            title=meeting.title,
+            meeting_id=meeting.meeting_id,
+        )
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "application/pdf",
+            },
+        )
+    except FirebaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except (FirebaseConfigError, FirebaseOperationError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export saved meeting PDF for '{meeting_id}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to export meeting PDF: {str(e)}",
         )
 
 

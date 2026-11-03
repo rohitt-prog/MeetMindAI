@@ -240,6 +240,112 @@ class ApiServiceTestClient {
       clearTimeout(timeoutId);
     }
   }
+
+  async exportMeetingPdf(request) {
+    const url = `${this.baseUrl}/api/meetings/export/pdf`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/pdf, application/json',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `PDF export failed with status: ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      let filename = 'meetmind_meeting_report.pdf';
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+        if (matches && matches[1]) {
+          filename = matches[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const blob = await response.blob();
+      return { blob, filename };
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('PDF export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl} to export PDF.`);
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while generating the PDF report.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async exportSavedMeetingPdf(meetingId) {
+    const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}/export/pdf`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/pdf, application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `PDF export failed with status: ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      let filename = `meetmind_${meetingId}.pdf`;
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+        if (matches && matches[1]) {
+          filename = matches[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const blob = await response.blob();
+      return { blob, filename };
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('PDF export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl} to export PDF.`);
+        }
+        throw err;
+      }
+      throw new Error(`An unexpected error occurred while exporting meeting '${meetingId}' to PDF.`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 describe('Frontend API Service & State Integration Tests', () => {
@@ -606,6 +712,99 @@ describe('Frontend API Service & State Integration Tests', () => {
     await assert.rejects(
       async () => client.getMeeting('nonexistent_id'),
       /Meeting 'nonexistent_id' not found in Firestore\./
+    );
+  });
+
+  it('PDF Export: successfully posts analysis and returns PDF blob with filename', async () => {
+    const mockPdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]); // "%PDF-1.4"
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\/export\/pdf$/);
+      assert.equal(options.method, 'POST');
+      const body = JSON.parse(options.body);
+      assert.equal(body.title, 'Sprint Architecture');
+
+      return new Response(mockPdfBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'attachment; filename="meetmind_sprint_architecture.pdf"',
+        },
+      });
+    };
+
+    const result = await client.exportMeetingPdf({
+      title: 'Sprint Architecture',
+      transcript: 'Alex will finalize GraphQL schema.',
+      analysis: {
+        summary: 'Team summary',
+        discussion_points: [],
+        decisions: [],
+        action_items: [],
+        clarification_required: false,
+        clarifications: [],
+      },
+    });
+
+    assert.equal(result.filename, 'meetmind_sprint_architecture.pdf');
+    assert.ok(result.blob);
+    assert.equal(result.blob.size, 8);
+  });
+
+  it('PDF Export: handles 500 error when PDF compiler fails', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: 'Failed to generate meeting report PDF.' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () =>
+        client.exportMeetingPdf({
+          title: 'Failing Meeting',
+          analysis: {
+            summary: 'Summary',
+            discussion_points: [],
+            decisions: [],
+            action_items: [],
+            clarification_required: false,
+            clarifications: [],
+          },
+        }),
+      /Failed to generate meeting report PDF\./
+    );
+  });
+
+  it('Saved Meeting PDF Export: retrieves PDF blob for stored meeting ID', async () => {
+    const mockPdfBytes = new Uint8Array([37, 80, 68, 70]);
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\/m_12345\/export\/pdf$/);
+      assert.equal(options.method, 'GET');
+
+      return new Response(mockPdfBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'attachment; filename="meetmind_m_12345.pdf"',
+        },
+      });
+    };
+
+    const result = await client.exportSavedMeetingPdf('m_12345');
+    assert.equal(result.filename, 'meetmind_m_12345.pdf');
+    assert.ok(result.blob);
+    assert.equal(result.blob.size, 4);
+  });
+
+  it('Saved Meeting PDF Export: handles 404 when saved meeting not found', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: "Meeting 'm_missing' not found in Firestore." }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.exportSavedMeetingPdf('m_missing'),
+      /Meeting 'm_missing' not found in Firestore\./
     );
   });
 });

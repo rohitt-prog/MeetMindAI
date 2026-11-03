@@ -5,6 +5,7 @@ import {
   MeetingClarificationRequest,
   MeetingListItem,
   MeetingDetailResponse,
+  MeetingPdfExportRequest,
 } from '../types/index';
 
 /**
@@ -281,6 +282,136 @@ class ApiService {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  /**
+   * Export unsaved or current meeting analysis as a PDF report.
+   * Calls POST /api/meetings/export/pdf
+   */
+  async exportMeetingPdf(request: MeetingPdfExportRequest): Promise<{ blob: Blob; filename: string }> {
+    const url = `${this.baseUrl}/api/meetings/export/pdf`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/pdf, application/json',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `PDF export failed with status: ${response.status}`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Extract filename from Content-Disposition header if available
+      let filename = 'meetmind_meeting_report.pdf';
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+        if (matches && matches[1]) {
+          filename = matches[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const blob = await response.blob();
+      return { blob, filename };
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('PDF export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl} to export PDF.`);
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while generating the PDF report.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Export a saved meeting by ID as a PDF report.
+   * Calls GET /api/meetings/{meeting_id}/export/pdf
+   */
+  async exportSavedMeetingPdf(meetingId: string): Promise<{ blob: Blob; filename: string }> {
+    const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}/export/pdf`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/pdf, application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `PDF export failed with status: ${response.status}`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      let filename = `meetmind_${meetingId}.pdf`;
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+        if (matches && matches[1]) {
+          filename = matches[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const blob = await response.blob();
+      return { blob, filename };
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('PDF export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl} to export PDF.`);
+        }
+        throw err;
+      }
+      throw new Error(`An unexpected error occurred while exporting meeting '${meetingId}' to PDF.`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Helper utility to trigger a browser file download from a Blob
+   */
+  downloadBlob(blob: Blob, filename: string): void {
+    if (typeof window === 'undefined') return;
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   }
 
   /**

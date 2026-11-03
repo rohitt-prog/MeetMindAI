@@ -13,13 +13,16 @@ import {
   AlertTriangle,
   RotateCcw,
   FileText,
-  Database
+  Database,
+  Download,
+  RefreshCw
 } from 'lucide-react';
 import { 
   MeetingAnalysisResponse, 
   ClarificationAnswer 
 } from '../types';
 import { ClarificationSection } from './ClarificationSection';
+import { apiService } from '../services/api';
 
 interface AnalysisResultsProps {
   analysis: MeetingAnalysisResponse;
@@ -46,6 +49,8 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
 }) => {
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const handleCopySummary = () => {
     navigator.clipboard.writeText(analysis.summary);
@@ -57,6 +62,29 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
   const unresolvedClarifications = analysis.clarifications.filter((c) => !c.resolved);
   const totalActionItems = analysis.action_items.length;
   const unassignedOwners = analysis.action_items.filter((a) => !a.owner).length;
+
+  const handleExportPdf = async () => {
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      if (effectiveMeetingId) {
+        const { blob, filename } = await apiService.exportSavedMeetingPdf(effectiveMeetingId);
+        apiService.downloadBlob(blob, filename);
+      } else {
+        const { blob, filename } = await apiService.exportMeetingPdf({
+          title: meetingTitle,
+          transcript: transcript,
+          analysis,
+        });
+        apiService.downloadBlob(blob, filename);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to export meeting PDF report';
+      setExportError(message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -102,6 +130,20 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
           )}
 
           <button
+            onClick={handleExportPdf}
+            disabled={isExporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold transition-colors shadow-2xs disabled:opacity-50"
+            title="Download executive meeting report PDF"
+          >
+            {isExporting ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600 dark:text-indigo-400" />
+            ) : (
+              <Download className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            )}
+            <span>{isExporting ? 'Generating PDF...' : 'Export PDF'}</span>
+          </button>
+
+          <button
             onClick={onResetMeeting}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700/80 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors shadow-2xs"
             title="Start analyzing another meeting"
@@ -111,6 +153,22 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Export Error Alert Banner */}
+      {exportError && (
+        <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 flex items-center justify-between text-xs text-rose-700 dark:text-rose-300 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+            <span>{exportError}</span>
+          </div>
+          <button
+            onClick={() => setExportError(null)}
+            className="text-[11px] font-medium underline hover:no-underline text-rose-700 dark:text-rose-300 ml-3 shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Expanded Transcript View if toggled */}
       {showTranscript && transcript && (

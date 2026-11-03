@@ -5,11 +5,11 @@
 **MeetMind AI** is an AI-powered meeting-to-action platform built to ingest raw, unstructured meeting transcripts and synthesize them into actionable insights, structured decisions, assigned deliverables, and clarifying questions.
 
 The system is designed with a decoupled client-server architecture:
-- **Client Tier**: React 18, Vite, TypeScript, Tailwind CSS, Lucide React icons (Modern productivity workspace with dark/light themes, loading states, recent meetings history panel, and clarification feedback loops).
+- **Client Tier**: React 18, Vite, TypeScript, Tailwind CSS, Lucide React icons (Modern productivity workspace with dark/light themes, loading states, recent meetings history panel, PDF report downloaders, and clarification feedback loops).
 - **Service Tier**: Python 3.11+, FastAPI, Uvicorn, Pydantic v2.
 - **Intelligence Tier**: Google Gemini API via official SDK (`google-genai` v2.34+).
 - **Persistence Tier (Phase 6 Implemented)**: Firebase Cloud Firestore via official `firebase-admin` Python SDK for persistent meeting records, transcripts, analyses, and clarification history.
-- **Export Tier (Phase 7 Planned)**: PDF / Markdown summary generators.
+- **Export Tier (Phase 7 Implemented)**: Server-side PDF report compilation engine via `reportlab` with in-memory binary streaming, custom two-pass canvas (`NumberedCanvas`), and auto-wrapping tables.
 
 ---
 
@@ -21,9 +21,11 @@ graph TD
         UI["Dashboard & Meeting UI"]
         APIService["Centralized API Client (apiService)"]
         HistoryList["RecentMeetingsList (Sidebar & History View)"]
+        ExportBtn["Export PDF Action (Workspace & Cards)"]
         State["Connection & Meeting State"]
         UI --> APIService
         HistoryList --> APIService
+        ExportBtn --> APIService
         APIService --> State
     end
 
@@ -34,10 +36,13 @@ graph TD
         ClarifyRoute["POST /api/meetings/clarify"]
         ListRoute["GET /api/meetings"]
         GetRoute["GET /api/meetings/{id}"]
+        ExportPostRoute["POST /api/meetings/export/pdf"]
+        ExportGetRoute["GET /api/meetings/{id}/export/pdf"]
         
         HealthService["HealthService"]
         GeminiService["GeminiService (Analysis & Clarifications)"]
         FirebaseService["FirebaseService (Firestore Persistence)"]
+        PdfService["PdfService (ReportLab PDF Generation)"]
         Config["Settings (Pydantic BaseSettings)"]
         
         Router --> HealthRoute
@@ -45,6 +50,8 @@ graph TD
         Router --> ClarifyRoute
         Router --> ListRoute
         Router --> GetRoute
+        Router --> ExportPostRoute
+        Router --> ExportGetRoute
         
         HealthRoute --> HealthService
         AnalyzeRoute --> GeminiService
@@ -53,6 +60,9 @@ graph TD
         ClarifyRoute --> FirebaseService
         ListRoute --> FirebaseService
         GetRoute --> FirebaseService
+        ExportPostRoute --> PdfService
+        ExportGetRoute --> FirebaseService
+        ExportGetRoute --> PdfService
         
         GeminiService --> Config
         FirebaseService --> Config
@@ -64,11 +74,16 @@ graph TD
         GeminiSDK --> GeminiFlash
     end
 
-    subgraph Database ["Persistence Tier (Phase 6 Implemented)"]
+    subgraph Database ["Persistence Tier (Phase 6)"]
         Firestore[("Firebase Cloud Firestore ('meetings' collection)")]
     end
 
-    APIService -- "REST / JSON (CORS)" --> Router
+    subgraph PDFEngine ["Export Tier (Phase 7)"]
+        ReportLab["ReportLab PDF Engine (In-Memory BytesIO)"]
+        PdfService --> ReportLab
+    end
+
+    APIService -- "REST / JSON & PDF Blobs" --> Router
     GeminiService -- "SDK / Structured Outputs" --> GeminiSDK
     FirebaseService -- "firebase-admin SDK" --> Firestore
 ```
@@ -85,7 +100,8 @@ graph TD
 | `/api/meetings/clarify` | `POST` | Re-evaluation with clarification answers & in-place Firestore update | **Phase 3, 4, 5, 6 (Implemented)** |
 | `/api/meetings` | `GET` | Retrieve list of recent saved meetings from Firestore (with `limit` param) | **Phase 6 (Implemented)** |
 | `/api/meetings/{id}` | `GET` | Retrieve full meeting transcript, analysis, and answers history | **Phase 6 (Implemented)** |
-| `/api/actions` | `GET/PATCH` | Action item tracking & status updates | Planned (Phase 7) |
+| `/api/meetings/export/pdf` | `POST` | Stream downloadable PDF report compiled from active/unsaved analysis | **Phase 7 (Implemented)** |
+| `/api/meetings/{id}/export/pdf` | `GET` | Stream downloadable PDF report compiled from saved Firestore record | **Phase 7 (Implemented)** |
 
 ---
 
@@ -151,7 +167,7 @@ sequenceDiagram
 ## 5. Persistence Tier Architecture: Firebase Cloud Firestore (Phase 6)
 
 ### 5.1 Technology Choice & Rationale
-Cloud Firestore was selected to replace MongoDB for MeetMind AI persistence:
+Cloud Firestore was selected for MeetMind AI persistence:
 - **Serverless & Scalable**: Native document database with zero database administration overhead.
 - **Document Flexibility**: Cleanly stores nested meeting analyses, action item collections, and clarification audit histories.
 - **Python Admin SDK**: First-class integration via `firebase-admin>=6.5.0` with secure service account credentials or Application Default Credentials (ADC).
@@ -222,29 +238,52 @@ Each document in the `meetings` collection follows this schema:
 
 ---
 
-## 6. Frontend UI Architecture & State Management (Phase 4 & 6)
+## 6. PDF Meeting Report Generation Tier (Phase 7)
 
-### 6.1 Component Hierarchy
+### 6.1 ReportLab Architecture & Flowables
+The PDF generation engine is powered by Python's `reportlab` library:
+- **In-Memory Streaming**: PDFs are generated entirely within `io.BytesIO` buffers, avoiding temporary disk I/O, race conditions, or unmanaged server storage.
+- **Two-Pass `NumberedCanvas`**: Dynamically calculates the total page count on the first pass and paints "Page X of Y" along with running headers and footers on the second pass.
+- **Flowable Hierarchy**:
+  1. **Header & Metadata Grid**: Logo badge, meeting title, generated date, meeting ID, and ambiguity status pill.
+  2. **Executive Summary Callout**: Highlighted card with Indigo accent bar.
+  3. **Discussion Points & Decisions**: Bulleted list with green checkmarks for decisions.
+  4. **Action Items Table**: Slate 800 header, alternate row background shading, automatic paragraph cell wrapping (Task: 242pt, Owner: 95pt, Deadline: 110pt, Status: 85pt = 532pt printable width).
+  5. **Ambiguity Audit Log**: Individual cards per ambiguity with category badges, transcript quotes, clarification questions, and resolutions.
+  6. **Original Transcript Section**: Formatted as sequential flowable rows so multi-page transcripts split across page breaks without overflow errors.
+
+### 6.2 Safe Filename Sanitization
+`PdfService.sanitize_filename()` transforms arbitrary meeting titles into safe HTTP attachment names:
+- Filters non-alphanumeric characters, converts whitespace to underscores.
+- Truncates base slugs to 45 characters.
+- Falls back to `meetmind_{meeting_id}.pdf` or `meetmind_meeting_report.pdf`.
+
+---
+
+## 7. Frontend UI Architecture & State Management
+
+### 7.1 Component Hierarchy
 - `App.tsx`: Central state hub managing active meeting, recent meetings list, theme preference (`localStorage`), health heartbeat polling, and data fetching.
-  - `Sidebar.tsx`: Navigation items (`Workspace`, `History`), active phase badge ("Phase 6"), compact recent meetings list, and theme switcher.
+  - `Sidebar.tsx`: Navigation items (`Workspace`, `History`), active phase badge ("Phase 7"), compact recent meetings list, and theme switcher.
   - `Header.tsx`: Breadcrumb navigation, live backend status pill, and "New Meeting" reset button.
   - `Dashboard.tsx`: Primary view coordinating workspace input, recent meetings history view, loading states, and analysis displays.
-    - `RecentMeetingsList.tsx`: Reusable meeting history component with compact mode (for sidebar) and card grid mode (for dashboard).
+    - `RecentMeetingsList.tsx`: Reusable meeting history component with compact mode (for sidebar), card grid mode (for dashboard), and quick-download PDF buttons.
     - `TranscriptWorkspace.tsx`: Multi-line transcript input, title field, live word/character counters, sample transcript loader, and validation.
     - `AnalysisLoadingState.tsx`: Animated multi-step progress indicators for analysis and clarification re-evaluation.
-    - `AnalysisResults.tsx`: Executive summary, meeting ID badge, collapsible transcript view, discussion points, confirmed decisions, action items, and embedded clarifications.
+    - `AnalysisResults.tsx`: Executive summary, meeting ID badge, collapsible transcript view, discussion points, confirmed decisions, action items, embedded clarifications, and "Export PDF" action.
       - `ClarificationSection.tsx`: Ambiguity feedback loop with category badges, input fields, resolve triggers, and error banners.
     - `StatsCard.tsx`: Metric indicators (discussion points, decisions, actions, ambiguities).
 
 ---
 
-## 7. Security & Configuration Best Practices
+## 8. Security & Configuration Best Practices
 
 1. **Environment Segregation**: Secrets and environment-specific parameters are managed via `.env` files; `.env.example` templates define required schema without exposing credentials.
 2. **Firebase Credential Security**:
    - Service account keys (`*serviceAccountKey*.json`, `*firebase*.json`, `service-account*.json`) are explicitly excluded in `.gitignore`.
    - Supports file path reference (`FIREBASE_CREDENTIALS_PATH`), raw JSON string (`FIREBASE_CREDENTIALS_JSON`), or GCP Application Default Credentials (ADC).
-   - Backend gracefully returns `503 Service Unavailable` if Firestore is requested while unconfigured, preventing crashes or data leakage.
+   - Backend gracefully returns `503 Service Unavailable` if Firestore is requested while unconfigured.
 3. **CORS Governance**: FastAPI `CORSMiddleware` restricts browser origins to approved client ports (`localhost:5173`, `localhost:3000`).
 4. **No Frontend Secrets**: The frontend only communicates with the backend API. All Gemini API keys and Firebase credentials remain strictly within the backend service tier.
-5. **Safe Mocking in Automated Tests**: All unit and integration test suites run with a fully mocked Firestore client (`MockFirestoreClient`), requiring zero live cloud credentials to achieve 100% test pass rates in CI/CD environments.
+5. **Safe Mocking in Automated Tests**: All unit and integration test suites run with mocked Firestore and Gemini clients, requiring zero live cloud credentials to achieve 100% test pass rates in CI/CD environments.
+6. **In-Memory PDF Generation**: PDF reports are streamed as byte arrays directly in HTTP responses with appropriate `Content-Disposition` headers; no documents or user data are stored in temporary server directories.
