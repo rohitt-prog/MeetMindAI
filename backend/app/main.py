@@ -61,4 +61,5 @@ def root():
         "docs": "/docs",
         "health": f"{settings.API_V1_STR}/health",
         "analyze": f"{settings.API_V1_STR}/meetings/analyze",
+        "clarify": f"{settings.API_V1_STR}/meetings/clarify",
     }

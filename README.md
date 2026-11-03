@@ -5,7 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript%20%7C%20Python-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Styling-Tailwind%20CSS-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%20API-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/)
-[![Phase](https://img.shields.io/badge/Phase-2%3A%20Gemini%20AI%20Backend-indigo)](README.md)
+[![Phase](https://img.shields.io/badge/Phase-3%3A%20Ambiguity%20Detection%20%26%20Clarification-indigo)](README.md)
 
 **MeetMind AI** is an intelligent assistant engineered to bridge the gap between spoken or transcribed meeting conversations and structured execution. It converts raw, unstructured meeting transcripts into actionable summaries, decisions, explicit task ownership, strict deadlines, and clarifying questions.
 
@@ -17,18 +17,21 @@ Designed for college lab evaluation, MeetMind AI emphasizes clean architectural 
 
 Modern teams spend substantial time in meetings, yet critical execution items often get lost in lengthy transcriptions or informal notes:
 - **Information Overload**: Parsing multi-page transcripts to identify what was decided is inefficient.
-- **Ambiguous Ownership**: Action items are frequently mentioned without clear owners or deadlines.
+- **Ambiguous Ownership**: Action items are frequently mentioned without clear owners (e.g., *"Someone should send the report"*).
+- **Vague Deadlines**: Due dates are framed loosely without calendar context (e.g., *"Let's finish this by Friday"*).
+- **Conflating Suggestions with Decisions**: Preliminary brainstorming (e.g., *"We should consider launching next month"*) is often incorrectly cataloged as a confirmed decision.
 - **Incomplete Deliverables**: Key prerequisites and clarification questions often emerge only after work begins, causing avoidable delays.
 
-MeetMind AI automates the extraction and structuring of these elements, turning passive transcripts into an active, traceable execution checklist.
+MeetMind AI automates the extraction and structuring of these elements, actively flags meaningful ambiguities, and facilitates a structured clarification feedback loop.
 
 ---
 
 ## 2. Project Objectives
 
 - **Automated Structuring**: Extract summaries, key discussion points, and critical decisions from conversational meeting text.
-- **Action Item Extraction**: Identify actionable tasks, assigned owners, and explicit or implicit deadlines.
-- **Proactive Clarification**: Formulate clarifying questions for incomplete, vague, or ambiguous tasks before execution starts.
+- **Ambiguity Detection**: Proactively identify and categorize missing owners, vague deadlines, ambiguous task scopes, and proposals vs. decisions.
+- **Clarification Workflow**: Re-evaluate and refine meeting insights through targeted user feedback without hallucinating details.
+- **Action Item Extraction**: Identify actionable tasks, assigned owners, and explicit or implicit deadlines with stable IDs.
 - **Clean Architecture**: Decouple the client dashboard, API services, AI orchestration, and persistent storage.
 
 ---
@@ -42,17 +45,17 @@ MeetMind AI automates the extraction and structuring of these elements, turning 
 - **Icons**: Lucide React
 - **HTTP Client**: Centralized Fetch API client (`apiService`)
 
-### Backend (Implemented in Phase 1 & Phase 2)
+### Backend (Implemented in Phase 1, 2 & 3)
 - **Framework**: Python 3.11+ with FastAPI
 - **Server**: Uvicorn (ASGI)
 - **AI Integration**: Google Gemini API via official `google-genai` Python SDK
 - **Model**: `gemini-2.5-flash` (configurable)
 - **Validation & Settings**: Pydantic v2 & `pydantic-settings`
-- **Testing**: Pytest & HTTPX TestClient with mocked Gemini calls
+- **Testing**: Pytest & HTTPX TestClient with mocked Gemini calls (19 automated tests)
 - **Middleware**: Fast CORS middleware configured for Vite development servers
 
 ### Data Layer (Reserved for Future Phase)
-- **Database (Phase 3)**: MongoDB for persistent meeting records and action items
+- **Database (Phase 4)**: MongoDB for persistent meeting records and action items
 
 ---
 
@@ -68,18 +71,19 @@ MeetMind AI automates the extraction and structuring of these elements, turning 
 | **Transcript Input Form** | Completed | Title, transcript textarea with word/character counter, and sample transcript loader. |
 | **Gemini AI Backend Integration** | Completed | `POST /api/meetings/analyze` converts transcripts into structured JSON via `google-genai`. |
 | **Anti-Hallucination Guardrails** | Completed | Extraction rules prevent inventing owners/deadlines; uses `null` for unassigned fields. |
-| **Clarification Query Engine** | Completed | Automatically sets `clarification_required` and generates proactive questions for ambiguities. |
-| **MongoDB Database Storage** | *Planned (Phase 3)* | Persistent storage for meeting archives, action item statuses, and user settings. |
-| **Frontend AI Analysis Integration**| *Planned (Phase 3)* | Connect React transcript form directly to the Gemini analysis endpoint. |
+| **Ambiguity Detection Engine** | Completed | Detects and tags ambiguities across ownership, deadlines, task scope, and proposals. |
+| **Interactive Clarification Workflow** | Completed | `POST /api/meetings/clarify` updates analysis based on submitted clarification answers. |
+| **MongoDB Database Storage** | *Planned (Phase 4)* | Persistent storage for meeting archives, action item statuses, and user settings. |
+| **Frontend Clarification UI** | *Planned (Phase 4)* | Interactive clarification Q&A cards directly in the React dashboard. |
 
 ---
 
-## 5. System Architecture
+## 5. System Architecture & Ambiguity Workflow
 
 ```mermaid
 flowchart LR
     subgraph Client ["Frontend (React + Vite + TypeScript)"]
-        UI["Dashboard & Input Section"]
+        UI["Dashboard & Meeting UI"]
         ClientService["apiService (Fetch)"]
         UI --> ClientService
     end
@@ -88,28 +92,31 @@ flowchart LR
         Router["API Router (/api)"]
         HealthRoute["GET /api/health"]
         AnalyzeRoute["POST /api/meetings/analyze"]
+        ClarifyRoute["POST /api/meetings/clarify"]
         HealthService["HealthService"]
         GeminiService["GeminiService"]
         Config["Settings (Pydantic BaseSettings)"]
         
         Router --> HealthRoute
         Router --> AnalyzeRoute
+        Router --> ClarifyRoute
         HealthRoute --> HealthService
         AnalyzeRoute --> GeminiService
+        ClarifyRoute --> GeminiService
         GeminiService --> Config
     end
 
-    subgraph AI ["AI Layer (Phase 2 Implemented)"]
+    subgraph AI ["AI Layer (Phase 2 & 3 Implemented)"]
         Gemini["Google Gemini API (google-genai)"]
     end
 
-    subgraph FutureDB ["Database Layer (Phase 3)"]
+    subgraph FutureDB ["Database Layer (Future Phase)"]
         MongoDB[("MongoDB Database")]
     end
 
     ClientService -- "HTTP / REST (CORS)" --> Router
     GeminiService -- "google-genai SDK" --> Gemini
-    Server -. "Phase 3" .-> MongoDB
+    Server -. "Future Phase" .-> MongoDB
 ```
 
 ---
@@ -154,7 +161,7 @@ meetmind-ai/
 │   │   │   ├── routes/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── health.py   # GET /api/health route
-│   │   │   │   └── meetings.py # POST /api/meetings/analyze route
+│   │   │   │   └── meetings.py # POST /analyze & POST /clarify routes
 │   │   │   ├── __init__.py
 │   │   │   └── router.py       # API router registration
 │   │   ├── core/
@@ -162,23 +169,23 @@ meetmind-ai/
 │   │   │   └── config.py       # Pydantic BaseSettings & Gemini config
 │   │   ├── schemas/
 │   │   │   ├── __init__.py
-│   │   │   ├── health.py       # Pydantic schemas for health responses
-│   │   │   └── meeting.py      # Request & Response schemas for analysis
+│   │   │   ├── health.py       # Health response schemas
+│   │   │   └── meeting.py      # Meeting & Clarification request/response schemas
 │   │   ├── services/
 │   │   │   ├── __init__.py
-│   │   │   ├── gemini_service.py # Gemini transcript analysis & parsing
+│   │   │   ├── gemini_service.py # Gemini extraction, ambiguity detection & re-evaluation
 │   │   │   └── health_service.py # Health check business logic
 │   │   ├── __init__.py
 │   │   └── main.py             # FastAPI entrypoint, middleware, errors
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_health.py      # Health & CORS test suite
-│   │   └── test_meetings.py    # Gemini analysis & validation test suite
+│   │   └── test_meetings.py    # Meeting analysis & Clarification test suite (16 tests)
 │   ├── .env.example            # Backend environment variable template
 │   └── requirements.txt        # Python dependencies (includes google-genai)
 │
 ├── docs/
-│   └── architecture.md         # System design & architecture details
+│   └── architecture.md         # System design & clarification workflow documentation
 │
 ├── .gitignore                  # Comprehensive Git exclusion rules
 └── README.md                   # Project documentation
@@ -205,54 +212,28 @@ DATABASE_NAME=meetmind_ai
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
-To configure local environments:
-```bash
-# Backend
-cp backend/.env.example backend/.env
-
-# Add your Gemini API key to backend/.env:
-# GEMINI_API_KEY=AIzaSy...
-
-# Frontend
-cp frontend/.env.example frontend/.env
-```
-
 ---
 
-## 8. Gemini Meeting Analysis API
+## 8. API Specification
 
-### Endpoint Specification
-
+### 8.1 Analyze Meeting Transcript
 `POST /api/meetings/analyze`
 
-**Content-Type**: `application/json`
-
-#### Request Schema
-
-| Field | Type | Required | Description |
-| :--- | :--- | :---: | :--- |
-| `transcript` | `string` | **Yes** | Raw meeting transcript or notes (must not be empty or whitespace). |
-| `title` | `string` | No | Optional title or topic of the meeting. |
-
-#### Example Request (Fictional Content)
-
-```bash
-curl -X POST http://localhost:8000/api/meetings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Mobile App Redesign Sync",
-    "transcript": "Sarah: Let us review the blockers for the milestone release.\nDavid: The Figma tokens are ready. I need Alex to confirm the GraphQL schema by Wednesday 4 PM.\nAlex: I will finalize the endpoint by Wednesday 4 PM once security signs off.\nPriya: We need test credentials for the staging sandbox. Who is provisioning them?\nSarah: Someone should provision staging access by tomorrow morning."
-  }'
-```
-
-#### Example Response (Fictional Content)
-
+**Request Body**:
 ```json
 {
-  "summary": "The team reviewed milestone blockers for the mobile app redesign, establishing commitments for GraphQL schema finalization and identifying an unassigned deliverable for staging sandbox credentials.",
+  "title": "Mobile App Redesign Sync",
+  "transcript": "Sarah: Let us review the blockers for the milestone release.\nDavid: The Figma tokens are ready. I need Alex to confirm the GraphQL schema by Wednesday 4 PM.\nAlex: I will finalize the endpoint by Wednesday 4 PM once security signs off.\nPriya: We need test credentials for the staging sandbox. Someone should provision them by tomorrow morning."
+}
+```
+
+**Response Body**:
+```json
+{
+  "summary": "The team aligned on the mobile app redesign milestones and identified staging access requirements.",
   "discussion_points": [
     "Figma design system token handoff from David",
-    "GraphQL schema updates for user preferences pending security approval",
+    "GraphQL schema updates for user preferences",
     "Staging sandbox test credentials requirement"
   ],
   "decisions": [
@@ -260,20 +241,124 @@ curl -X POST http://localhost:8000/api/meetings/analyze \
   ],
   "action_items": [
     {
+      "id": "action_1",
       "task": "Confirm and finalize GraphQL schema changes for user preferences",
       "owner": "Alex",
       "deadline": "Wednesday 4 PM",
       "status": "pending"
     },
     {
-      "task": "Provision test credentials for the staging sandbox environment",
+      "id": "action_2",
+      "task": "Provision test credentials for the staging sandbox",
       "owner": null,
       "deadline": "Tomorrow morning",
       "status": "pending"
     }
   ],
   "clarification_required": true,
-  "clarification_question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?"
+  "clarification_question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?",
+  "clarifications": [
+    {
+      "id": "clarif_1",
+      "category": "ownership",
+      "original_statement": "Someone should provision them by tomorrow morning.",
+      "explanation": "No specific individual or team was assigned to provision staging access.",
+      "question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?",
+      "related_action_item_id": "action_2",
+      "resolved": false
+    }
+  ]
+}
+```
+
+---
+
+### 8.2 Submit Clarification Answers
+`POST /api/meetings/clarify`
+
+Submits answers to open clarification questions. The backend re-evaluates the analysis and updates only the relevant action items or decisions.
+
+**Request Body**:
+```json
+{
+  "analysis": {
+    "summary": "The team aligned on the mobile app redesign milestones and identified staging access requirements.",
+    "discussion_points": ["Figma tokens", "GraphQL schema", "Staging credentials"],
+    "decisions": ["Alex will finalize GraphQL endpoints by Wednesday at 4 PM"],
+    "action_items": [
+      {
+        "id": "action_1",
+        "task": "Confirm and finalize GraphQL schema changes",
+        "owner": "Alex",
+        "deadline": "Wednesday 4 PM",
+        "status": "pending"
+      },
+      {
+        "id": "action_2",
+        "task": "Provision test credentials for the staging sandbox",
+        "owner": null,
+        "deadline": "Tomorrow morning",
+        "status": "pending"
+      }
+    ],
+    "clarification_required": true,
+    "clarification_question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?",
+    "clarifications": [
+      {
+        "id": "clarif_1",
+        "category": "ownership",
+        "original_statement": "Someone should provision them by tomorrow morning.",
+        "explanation": "No specific individual or team was assigned to provision staging access.",
+        "question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?",
+        "related_action_item_id": "action_2",
+        "resolved": false
+      }
+    ]
+  },
+  "answers": [
+    {
+      "clarification_id": "clarif_1",
+      "answer": "David from DevOps will provision the staging test credentials by tomorrow 10 AM."
+    }
+  ]
+}
+```
+
+**Updated Response Body**:
+```json
+{
+  "summary": "The team aligned on mobile app redesign milestones and assigned staging credentials provisioning to David from DevOps.",
+  "discussion_points": ["Figma tokens", "GraphQL schema", "Staging credentials"],
+  "decisions": ["Alex will finalize GraphQL endpoints by Wednesday at 4 PM"],
+  "action_items": [
+    {
+      "id": "action_1",
+      "task": "Confirm and finalize GraphQL schema changes",
+      "owner": "Alex",
+      "deadline": "Wednesday 4 PM",
+      "status": "pending"
+    },
+    {
+      "id": "action_2",
+      "task": "Provision test credentials for the staging sandbox",
+      "owner": "David",
+      "deadline": "Tomorrow 10 AM",
+      "status": "pending"
+    }
+  ],
+  "clarification_required": false,
+  "clarification_question": null,
+  "clarifications": [
+    {
+      "id": "clarif_1",
+      "category": "ownership",
+      "original_statement": "Someone should provision them by tomorrow morning.",
+      "explanation": "No specific individual or team was assigned to provision staging access.",
+      "question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?",
+      "related_action_item_id": "action_2",
+      "resolved": true
+    }
+  ]
 }
 ```
 
@@ -308,9 +393,9 @@ curl -X POST http://localhost:8000/api/meetings/analyze \
    pip install -r requirements.txt
    ```
 
-4. **Run the automated test suite**:
+4. **Run the complete automated test suite (19 tests)**:
    ```bash
-   pytest tests/
+   pytest -v tests/
    ```
 
 5. **Start the FastAPI server**:
@@ -321,8 +406,8 @@ curl -X POST http://localhost:8000/api/meetings/analyze \
 The backend server is accessible at `http://localhost:8000`.
 - Health Endpoint: `http://localhost:8000/api/health`
 - Meeting Analysis Endpoint: `http://localhost:8000/api/meetings/analyze`
+- Clarification Resolution Endpoint: `http://localhost:8000/api/meetings/clarify`
 - Interactive Swagger Docs: `http://localhost:8000/docs`
-- ReDoc Docs: `http://localhost:8000/redoc`
 
 ---
 
@@ -364,15 +449,16 @@ The frontend dashboard will be available at `http://localhost:5173`.
   - Integrate official `google-genai` Python SDK
   - Pydantic schema contracts for `MeetingAnalysisRequest` and `MeetingAnalysisResponse`
   - Anti-hallucination prompt engineering (enforce `null` for unstated owners/deadlines)
-  - Proactive clarification query engine for ambiguous requirements
   - Robust JSON parsing with markdown-fence sanitization
   - Comprehensive unit test suite with mocked Gemini calls
-- [ ] **Phase 3: Database & Persistence Layer**
+- [x] **Phase 3: Ambiguity Detection & Clarification Workflow**
+  - Detect ambiguous ownership, deadlines, task scope, and decision vs. suggestion
+  - Structured `clarifications` data model with stable IDs and category tags
+  - Interactive clarification re-evaluation endpoint (`POST /api/meetings/clarify`)
+  - Safe, non-destructive updating of action items and decisions
+  - Comprehensive test suite covering 19 test scenarios
+- [ ] **Phase 4: Database & UI Clarification Integration**
   - MongoDB connection and schema definitions
   - Meeting transcript archiving and retrieval
   - Action item status tracking (pending, completed, blocked)
-  - Connect React frontend directly to `POST /api/meetings/analyze`
-- [ ] **Phase 4: Advanced Features & Export**
-  - Export action items to markdown / CSV / Jira format
-  - Audio transcript upload / speech-to-text pipeline
-  - Analytics and team velocity metrics
+  - Interactive clarification Q&A cards directly in the React frontend

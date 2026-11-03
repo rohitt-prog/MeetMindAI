@@ -2,6 +2,11 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 class ActionItem(BaseModel):
+    id: Optional[str] = Field(
+        default=None,
+        description="Stable identifier for the action item (e.g., action_1)",
+        json_schema_extra={"example": "action_1"}
+    )
     task: str = Field(
         ...,
         description="Actionable task or deliverable description",
@@ -21,6 +26,43 @@ class ActionItem(BaseModel):
         default="pending",
         description="Current status of the action item (e.g., pending, in_progress, completed)",
         json_schema_extra={"example": "pending"}
+    )
+
+class ClarificationItem(BaseModel):
+    id: str = Field(
+        ...,
+        description="Stable identifier for the clarification item (e.g., clarif_1)",
+        json_schema_extra={"example": "clarif_1"}
+    )
+    category: str = Field(
+        ...,
+        description="Type or category of ambiguity (ownership, deadline, task_scope, decision_vs_suggestion, missing_context)",
+        json_schema_extra={"example": "ownership"}
+    )
+    original_statement: str = Field(
+        ...,
+        description="The verbatim or excerpted quote from the transcript exhibiting ambiguity",
+        json_schema_extra={"example": "Someone should provision staging access by tomorrow morning."}
+    )
+    explanation: str = Field(
+        ...,
+        description="Concise explanation of why the statement is ambiguous and what is missing",
+        json_schema_extra={"example": "No specific individual or team was assigned to provision staging access."}
+    )
+    question: str = Field(
+        ...,
+        description="A direct, professional clarification question addressing the ambiguity",
+        json_schema_extra={"example": "Who is specifically responsible for provisioning the staging sandbox access?"}
+    )
+    related_action_item_id: Optional[str] = Field(
+        default=None,
+        description="Optional ID of the related action item if ambiguity pertains to a specific task",
+        json_schema_extra={"example": "action_2"}
+    )
+    resolved: bool = Field(
+        default=False,
+        description="Whether this ambiguity has been resolved through user clarification",
+        json_schema_extra={"example": False}
     )
 
 class MeetingAnalysisRequest(BaseModel):
@@ -71,4 +113,31 @@ class MeetingAnalysisResponse(BaseModel):
         default=None,
         description="Proactive clarifying question addressing ambiguous tasks, missing owners, or missing prerequisites",
         json_schema_extra={"example": "Who is responsible for provisioning the staging sandbox test credentials?"}
+    )
+    clarifications: List[ClarificationItem] = Field(
+        default_factory=list,
+        description="Structured list of ambiguity clarifications identified in the meeting transcript"
+    )
+
+class ClarificationAnswer(BaseModel):
+    clarification_id: str = Field(
+        ...,
+        description="The ID of the clarification being answered (e.g., clarif_1)",
+        json_schema_extra={"example": "clarif_1"}
+    )
+    answer: str = Field(
+        ...,
+        description="The user's response providing clarification",
+        json_schema_extra={"example": "David from Infrastructure will provision the staging access."}
+    )
+
+class MeetingClarificationRequest(BaseModel):
+    analysis: MeetingAnalysisResponse = Field(
+        ...,
+        description="The existing meeting analysis object to be updated with clarification answers"
+    )
+    answers: List[ClarificationAnswer] = Field(
+        ...,
+        description="List of clarification answers submitted by the user",
+        min_length=1
     )

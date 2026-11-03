@@ -17,7 +17,7 @@ The system is designed with a decoupled client-server architecture:
 ```mermaid
 graph TD
     subgraph Client ["Frontend (React + Vite + TypeScript)"]
-        UI["Dashboard & New Meeting UI"]
+        UI["Dashboard & Meeting UI"]
         APIService["Centralized API Client (apiService)"]
         State["Connection & UI State"]
         UI --> APIService
@@ -28,24 +28,27 @@ graph TD
         Router["API Router (/api)"]
         HealthRoute["GET /api/health"]
         AnalyzeRoute["POST /api/meetings/analyze"]
+        ClarifyRoute["POST /api/meetings/clarify"]
         HealthService["HealthService"]
-        GeminiService["GeminiService (Transcript Analysis)"]
+        GeminiService["GeminiService (Analysis & Clarifications)"]
         Config["Settings (Pydantic BaseSettings)"]
         
         Router --> HealthRoute
         Router --> AnalyzeRoute
+        Router --> ClarifyRoute
         HealthRoute --> HealthService
         AnalyzeRoute --> GeminiService
+        ClarifyRoute --> GeminiService
         GeminiService --> Config
     end
 
-    subgraph AI ["Intelligence Tier (Phase 2 Implemented)"]
+    subgraph AI ["Intelligence Tier (Phase 2 & 3 Implemented)"]
         GeminiSDK["Google Gemini API (google-genai)"]
         GeminiFlash["Gemini 2.5 Flash / Selected Model"]
         GeminiSDK --> GeminiFlash
     end
 
-    subgraph Database ["Persistence Tier (Future)"]
+    subgraph Database ["Persistence Tier (Future Phase)"]
         MongoStore[("MongoDB Database")]
     end
 
@@ -61,35 +64,54 @@ graph TD
 | Route | Method | Purpose | Implementation Phase |
 | :--- | :--- | :--- | :--- |
 | `/api/health` | `GET` | System heartbeat & availability check | **Phase 1 (Implemented)** |
-| `/api/meetings/analyze` | `POST` | Transcript parsing & Gemini AI pipeline | **Phase 2 (Implemented)** |
-| `/api/meetings` | `GET/POST` | Meeting storage & historical retrieval | Planned (Phase 3) |
-| `/api/actions` | `GET/PATCH` | Action item tracking & status updates | Planned (Phase 3) |
+| `/api/meetings/analyze` | `POST` | Transcript parsing & ambiguity detection | **Phase 2 & 3 (Implemented)** |
+| `/api/meetings/clarify` | `POST` | Re-evaluation with user clarification answers | **Phase 3 (Implemented)** |
+| `/api/meetings` | `GET/POST` | Meeting storage & historical retrieval | Planned (Phase 4) |
+| `/api/actions` | `GET/PATCH` | Action item tracking & status updates | Planned (Phase 4) |
 
 ---
 
-## 4. Gemini AI Integration Architecture
+## 4. Ambiguity Detection & Clarification Workflow (Phase 3)
 
-### 4.1 SDK & Model Selection
-The backend leverages the official `google-genai` Python library. The default model is `gemini-2.5-flash`, configurable via `GEMINI_MODEL` in `backend/.env`.
+### 4.1 Sequence Flow
 
-### 4.2 Structured Output Schema Enforcement
-The prompt pipeline utilizes `GenerateContentConfig` with:
-- `response_mime_type="application/json"`
-- `response_schema=MeetingAnalysisResponse` (Pydantic schema)
-- `temperature=0.1` for deterministic extraction
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Frontend as Frontend / Client
+    participant API as FastAPI Backend (/api/meetings)
+    participant Service as GeminiService
+    participant LLM as Google Gemini API
 
-### 4.3 Extraction Rules & Anti-Hallucination Guardrails
-1. **Summary**: Concise, high-level summary of meeting discussions and outcomes.
-2. **Discussion Points**: Key topics and technical debates raised.
-3. **Decisions**: Explicit decisions agreed by participants (no assumed or fabricated decisions).
-4. **Action Items**:
-   - `task`: Concrete actionable description.
-   - `owner`: Explicit participant assigned (set to `null` if unassigned).
-   - `deadline`: Explicit timeframe mentioned (set to `null` if unspecified).
-   - `status`: Defaults to `pending`.
-5. **Clarification Detection**:
-   - `clarification_required`: Evaluated as `true` if any task lacks clear ownership, actionable scope, or prerequisite details.
-   - `clarification_question`: Formulates a direct, clarifying query addressing the ambiguity.
+    User->>Frontend: Submit meeting transcript
+    Frontend->>API: POST /api/meetings/analyze
+    API->>Service: analyze_transcript(transcript, title)
+    Service->>LLM: generate_content(prompt, response_schema=MeetingAnalysisResponse)
+    LLM-->>Service: Structured JSON with ambiguities & questions
+    Service-->>API: MeetingAnalysisResponse (with clarifications list)
+    API-->>Frontend: 200 OK (Action items + Unresolved clarifications)
+    
+    User->>Frontend: Review ambiguities & supply answers
+    Frontend->>API: POST /api/meetings/clarify (analysis + answers)
+    API->>Service: resolve_clarifications(analysis, answers)
+    Service->>LLM: generate_content(update prompt, response_schema=MeetingAnalysisResponse)
+    LLM-->>Service: Refined JSON (action items updated, resolved=true)
+    Service-->>API: Updated MeetingAnalysisResponse
+    API-->>Frontend: 200 OK (Final action items & clear status)
+```
+
+### 4.2 Ambiguity Taxonomies
+1. **Ownership (`ownership`)**: Statements lacking an assigned owner (e.g., *"Someone should send the report"*). Action item owner remains `null` until confirmed.
+2. **Deadline (`deadline`)**: Statements with vague or ambiguous dates (e.g., *"Finish this by Friday"*). Deadline remains `null` until clarified.
+3. **Task Scope (`task_scope`)**: Statements where the deliverable or responsibility is ambiguous (e.g., *"Alex will handle it"*).
+4. **Decision vs. Suggestion (`decision_vs_suggestion`)**: Brainstorming proposals or ideas (e.g., *"We should consider launching next month"*) are strictly excluded from confirmed `decisions` unless validated.
+5. **Missing Context (`missing_context`)**: Statements that lack necessary prerequisites or contextual background.
+
+### 4.3 Safe Non-Destructive Updates
+- Unanswered or unrelated action items and decisions are untouched.
+- When an answer is vague or uncertain (e.g., *"Still undecided"*), the ambiguity is preserved with `resolved: false`.
+- Only when all clarifications have `resolved: true` does `clarification_required` flip to `false` and `clarification_question` reset to `null`.
 
 ---
 
