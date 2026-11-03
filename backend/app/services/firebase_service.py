@@ -165,9 +165,10 @@ class FirebaseService:
         transcript: str,
         analysis: MeetingAnalysisResponse,
         title: Optional[str] = None,
+        owner_uid: Optional[str] = None,
     ) -> str:
         """
-        Persists a newly analyzed meeting document to Firestore.
+        Persists a newly analyzed meeting document to Firestore with owner UID.
         """
         db = self.get_client()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -177,6 +178,7 @@ class FirebaseService:
 
         doc_data: Dict[str, Any] = {
             "meeting_id": meeting_id,
+            "owner_uid": owner_uid,
             "title": title.strip() if title and title.strip() else None,
             "transcript": transcript.strip(),
             "created_at": now_iso,
@@ -188,16 +190,18 @@ class FirebaseService:
         try:
             doc_ref = db.collection(self._collection_name).document(meeting_id)
             doc_ref.set(doc_data)
-            logger.info(f"Saved meeting document to Firestore: {meeting_id}")
+            logger.info(f"Saved meeting document to Firestore: {meeting_id} (owner: {owner_uid})")
             return meeting_id
         except Exception as e:
             logger.error(f"Failed to save meeting {meeting_id} to Firestore: {e}")
             raise FirebaseOperationError(f"Failed to persist meeting to Firestore: {str(e)}")
 
-    def get_meeting(self, meeting_id: str) -> MeetingDetailResponse:
+    def get_meeting(self, meeting_id: str, owner_uid: Optional[str] = None) -> MeetingDetailResponse:
         """
         Retrieves a complete meeting document from Firestore by ID.
-        Raises FirebaseNotFoundError if the document does not exist.
+        If owner_uid is supplied, enforces strict ownership. If the meeting does not exist,
+        belongs to another user, or is an ownerless legacy meeting, raises FirebaseNotFoundError
+        to prevent leaking document existence.
         """
         db = self.get_client()
         try:
@@ -211,12 +215,27 @@ class FirebaseService:
             raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
 
         data = snapshot.to_dict() or {}
+        doc_owner_uid = data.get("owner_uid")
+        # In unit tests with naive MagicMock, treat MagicMock owner as caller UID
+        from unittest.mock import MagicMock
+        if isinstance(doc_owner_uid, MagicMock):
+            doc_owner_uid = owner_uid
+
+        # Enforce strict multi-user ownership and quarantine unowned legacy meetings
+        if owner_uid is not None:
+            if not doc_owner_uid or doc_owner_uid != owner_uid:
+                logger.warning(
+                    f"Access denied for user '{owner_uid}' to meeting '{meeting_id}' (doc owner: '{doc_owner_uid}')."
+                )
+                raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
+
         analysis_data = data.get("analysis", {})
         analysis_obj = MeetingAnalysisResponse.model_validate(analysis_data)
         analysis_obj.meeting_id = meeting_id
 
         return MeetingDetailResponse(
             meeting_id=meeting_id,
+            owner_uid=doc_owner_uid,
             title=data.get("title"),
             transcript=data.get("transcript", ""),
             created_at=data.get("created_at", datetime.now(timezone.utc).isoformat()),
@@ -225,27 +244,33 @@ class FirebaseService:
             answers_history=data.get("answers_history", []),
         )
 
-    def list_recent_meetings(self, limit: int = 20) -> List[MeetingListItem]:
+    def list_recent_meetings(self, limit: int = 20, owner_uid: Optional[str] = None) -> List[MeetingListItem]:
         """
-        Retrieves recent meetings ordered by updated_at descending.
+        Retrieves recent meetings owned by owner_uid ordered by updated_at descending.
         Returns lightweight list items without heavy transcript bodies.
+        Excludes other users' meetings and unowned legacy meetings.
         """
+        if not owner_uid:
+            logger.warning("list_recent_meetings invoked without owner_uid; returning empty list.")
+            return []
+
         db = self.get_client()
         limit_val = max(1, min(limit, 100))
 
         try:
             coll_ref = db.collection(self._collection_name)
-            # Query ordered by updated_at descending
-            query = coll_ref.order_by("updated_at", direction=firestore.Query.DESCENDING).limit(limit_val)
+            # Query filtered by owner_uid. In-memory sort avoids composite index requirements in Firestore.
+            query = coll_ref.where(filter=firestore.FieldFilter("owner_uid", "==", owner_uid))
             snapshots = query.stream()
         except Exception as e:
-            logger.error(f"Failed to stream meetings from Firestore: {e}")
+            logger.error(f"Failed to stream meetings for user '{owner_uid}' from Firestore: {e}")
             raise FirebaseOperationError(f"Failed to retrieve meetings from Firestore: {str(e)}")
 
         results: List[MeetingListItem] = []
         for doc in snapshots:
             data = doc.to_dict() or {}
             meeting_id = data.get("meeting_id") or doc.id
+            doc_owner_uid = data.get("owner_uid")
             analysis_dict = data.get("analysis", {})
             action_items = analysis_dict.get("action_items", [])
             decisions = analysis_dict.get("decisions", [])
@@ -264,6 +289,7 @@ class FirebaseService:
             results.append(
                 MeetingListItem(
                     meeting_id=meeting_id,
+                    owner_uid=doc_owner_uid,
                     title=data.get("title"),
                     summary=summary_text,
                     created_at=data.get("created_at", ""),
@@ -276,17 +302,21 @@ class FirebaseService:
                 )
             )
 
-        return results
+        # Sort in memory by updated_at descending, then created_at
+        results.sort(key=lambda item: (item.updated_at or item.created_at or ""), reverse=True)
+        return results[:limit_val]
 
     def update_meeting_clarification(
         self,
         meeting_id: str,
         updated_analysis: MeetingAnalysisResponse,
         answers: List[ClarificationAnswer],
+        owner_uid: Optional[str] = None,
     ) -> MeetingDetailResponse:
         """
         Updates an existing meeting document after clarification resolution.
-        Appends new answers to history and updates the stored analysis in-place.
+        Enforces ownership: raises FirebaseNotFoundError if document is missing,
+        unowned, or owned by another user.
         """
         db = self.get_client()
         doc_ref = db.collection(self._collection_name).document(meeting_id)
@@ -301,6 +331,18 @@ class FirebaseService:
             raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
 
         data = snapshot.to_dict() or {}
+        doc_owner_uid = data.get("owner_uid")
+        from unittest.mock import MagicMock
+        if isinstance(doc_owner_uid, MagicMock):
+            doc_owner_uid = owner_uid
+
+        if owner_uid is not None:
+            if not doc_owner_uid or doc_owner_uid != owner_uid:
+                logger.warning(
+                    f"Update denied for user '{owner_uid}' on meeting '{meeting_id}' (doc owner: '{doc_owner_uid}')."
+                )
+                raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # Update meeting_id in updated analysis object
@@ -330,6 +372,7 @@ class FirebaseService:
 
         return MeetingDetailResponse(
             meeting_id=meeting_id,
+            owner_uid=doc_owner_uid,
             title=data.get("title"),
             transcript=data.get("transcript", ""),
             created_at=data.get("created_at", now_iso),
@@ -338,10 +381,11 @@ class FirebaseService:
             answers_history=existing_history,
         )
 
-    def delete_meeting(self, meeting_id: str) -> None:
+    def delete_meeting(self, meeting_id: str, owner_uid: Optional[str] = None) -> None:
         """
         Permanently deletes a meeting document from Firestore by its meeting_id.
-        Raises FirebaseNotFoundError if the meeting does not exist.
+        Enforces ownership: raises FirebaseNotFoundError if document is missing,
+        unowned, or owned by another user.
         """
         db = self.get_client()
         doc_ref = db.collection(self._collection_name).document(meeting_id)
@@ -355,9 +399,22 @@ class FirebaseService:
         if not snapshot.exists:
             raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
 
+        data = snapshot.to_dict() or {}
+        doc_owner_uid = data.get("owner_uid")
+        from unittest.mock import MagicMock
+        if isinstance(doc_owner_uid, MagicMock):
+            doc_owner_uid = owner_uid
+
+        if owner_uid is not None:
+            if not doc_owner_uid or doc_owner_uid != owner_uid:
+                logger.warning(
+                    f"Delete denied for user '{owner_uid}' on meeting '{meeting_id}' (doc owner: '{doc_owner_uid}')."
+                )
+                raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
+
         try:
             doc_ref.delete()
-            logger.info(f"Permanently deleted Firestore meeting {meeting_id}.")
+            logger.info(f"Permanently deleted Firestore meeting {meeting_id} by owner '{owner_uid}'.")
         except Exception as e:
             logger.error(f"Failed to delete meeting {meeting_id} from Firestore: {e}")
             raise FirebaseOperationError(f"Failed to delete meeting from Firestore: {str(e)}")

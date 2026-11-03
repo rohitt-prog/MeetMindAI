@@ -159,6 +159,7 @@ class MeetingClarificationRequest(BaseModel):
 
 class MeetingListItem(BaseModel):
     meeting_id: str = Field(..., description="Unique meeting ID in Firestore")
+    owner_uid: Optional[str] = Field(default=None, description="Firebase UID of the meeting owner")
     title: Optional[str] = Field(default=None, description="Optional meeting title")
     summary: str = Field(..., description="Executive summary snippet or text")
     created_at: str = Field(..., description="ISO 8601 creation timestamp")
@@ -171,6 +172,7 @@ class MeetingListItem(BaseModel):
 
 class MeetingDetailResponse(BaseModel):
     meeting_id: str = Field(..., description="Unique meeting ID in Firestore")
+    owner_uid: Optional[str] = Field(default=None, description="Firebase UID of the meeting owner")
     title: Optional[str] = Field(default=None, description="Meeting title or null")
     transcript: str = Field(..., description="Full meeting transcript text")
     created_at: str = Field(..., description="ISO 8601 creation timestamp")

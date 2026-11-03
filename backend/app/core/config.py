@@ -25,11 +25,12 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
-    # Firebase Cloud Firestore Configuration (Phase 6)
+    # Firebase Configuration (Cloud Firestore & Authentication)
     FIREBASE_PROJECT_ID: Optional[str] = None
     FIREBASE_CREDENTIALS_PATH: Optional[str] = None
     FIREBASE_CREDENTIALS_JSON: Optional[str] = None
     FIRESTORE_COLLECTION_MEETINGS: str = "meetings"
+    FIREBASE_AUTH_ENABLED: bool = True
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

@@ -18,6 +18,7 @@ client = TestClient(app)
 
 MOCK_SAVED_MEETING_DATA = {
     "meeting_id": "m_test_123456",
+    "owner_uid": "test_user_default",
     "title": "Mobile App Sync",
     "transcript": "Sarah: Let's review blockers. Alex will finalize GraphQL endpoint by Wednesday 4 PM.",
     "created_at": "2026-11-03T20:00:00Z",
@@ -109,8 +110,44 @@ def create_mock_firestore_client(existing_docs=None):
             mock_query.limit.side_effect = mock_limit
             return mock_query
 
+        def mock_col_stream():
+            docs = []
+            for doc_id, doc_data in existing_docs.items():
+                snap = MagicMock()
+                snap.exists = True
+                snap.id = doc_id
+                snap.to_dict.return_value = doc_data
+                docs.append(snap)
+            return docs
+
+        mock_col.stream.side_effect = mock_col_stream
         mock_col.document.side_effect = mock_document
         mock_col.order_by.side_effect = mock_order_by
+
+        def mock_where(*args, **kwargs):
+            mock_filtered_query = MagicMock()
+            target_owner = None
+            if "filter" in kwargs:
+                f = kwargs["filter"]
+                target_owner = getattr(f, "value", None)
+            elif len(args) >= 3:
+                target_owner = args[2]
+
+            def mock_stream():
+                docs = []
+                for doc_id, doc_data in existing_docs.items():
+                    if target_owner is None or doc_data.get("owner_uid") == target_owner:
+                        snap = MagicMock()
+                        snap.exists = True
+                        snap.id = doc_id
+                        snap.to_dict.return_value = doc_data
+                        docs.append(snap)
+                return docs
+
+            mock_filtered_query.stream.side_effect = mock_stream
+            return mock_filtered_query
+
+        mock_col.where.side_effect = mock_where
         return mock_col
 
     mock_db.collection.side_effect = mock_collection
@@ -188,6 +225,7 @@ def test_list_recent_meetings_success():
     docs_store = {
         "m_1": {
             "meeting_id": "m_1",
+            "owner_uid": "test_user_default",
             "title": "Meeting 1",
             "transcript": "Transcript 1",
             "created_at": "2026-11-03T18:00:00Z",
@@ -203,6 +241,7 @@ def test_list_recent_meetings_success():
         },
         "m_2": {
             "meeting_id": "m_2",
+            "owner_uid": "test_user_default",
             "title": "Meeting 2",
             "transcript": "Transcript 2",
             "created_at": "2026-11-03T20:00:00Z",
@@ -226,12 +265,13 @@ def test_list_recent_meetings_success():
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
-        assert data[0]["meeting_id"] == "m_1"
-        assert data[0]["action_items_count"] == 1
-        assert data[0]["decisions_count"] == 1
-        assert data[1]["meeting_id"] == "m_2"
-        assert data[1]["clarification_required"] is True
-        assert data[1]["unresolved_clarifications_count"] == 1
+        # Ordered by updated_at descending (m_2: 21:00, m_1: 19:00)
+        assert data[0]["meeting_id"] == "m_2"
+        assert data[0]["clarification_required"] is True
+        assert data[0]["unresolved_clarifications_count"] == 1
+        assert data[1]["meeting_id"] == "m_1"
+        assert data[1]["action_items_count"] == 1
+        assert data[1]["decisions_count"] == 1
     finally:
         firebase_service._client = orig_firestore_client
 
@@ -280,6 +320,7 @@ def test_clarify_updates_existing_meeting():
     """
     initial_meeting = {
         "meeting_id": "m_target_update",
+        "owner_uid": "test_user_default",
         "title": "Sprint Sync",
         "transcript": "Someone should provision credentials.",
         "created_at": "2026-11-03T18:00:00Z",

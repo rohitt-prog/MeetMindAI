@@ -5,6 +5,37 @@ import assert from 'node:assert/strict';
 class ApiServiceTestClient {
   constructor(baseUrl) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.authTokenGetter = null;
+    this.onUnauthorized = null;
+  }
+
+  setAuthTokenGetter(getter) {
+    this.authTokenGetter = getter;
+  }
+
+  setOnUnauthorized(callback) {
+    this.onUnauthorized = callback;
+  }
+
+  async getAuthHeaders() {
+    const headers = {};
+    if (this.authTokenGetter) {
+      try {
+        const token = await this.authTokenGetter();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+    return headers;
+  }
+
+  handleUnauthorizedResponse(status) {
+    if (status === 401 && this.onUnauthorized) {
+      this.onUnauthorized();
+    }
   }
 
   async getHealth() {
@@ -47,6 +78,7 @@ class ApiServiceTestClient {
     const url = `${this.baseUrl}/api/meetings/analyze`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
@@ -54,12 +86,17 @@ class ApiServiceTestClient {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
         let errorMessage = `Analysis request failed with status: ${response.status}`;
         try {
           const errorJson = await response.json();
@@ -165,15 +202,23 @@ class ApiServiceTestClient {
     const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders,
+        },
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
         let errorMessage = `Failed to list meetings (${response.status})`;
         try {
           const errorJson = await response.json();
@@ -1005,5 +1050,44 @@ describe('Frontend API Service & State Integration Tests', () => {
       async () => client.deleteMeeting('m_test_123'),
       /Firebase Firestore is not configured/
     );
+  });
+
+  it('Authentication: attaches Bearer token header when setAuthTokenGetter is provided', async () => {
+    let capturedHeaders = null;
+    client.setAuthTokenGetter(async () => 'mock_firebase_id_token_xyz123');
+
+    globalThis.fetch = async (url, options) => {
+      capturedHeaders = options.headers;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    await client.listMeetings(5);
+    assert.ok(capturedHeaders, 'Headers should be captured');
+    assert.equal(capturedHeaders['Authorization'], 'Bearer mock_firebase_id_token_xyz123');
+    client.setAuthTokenGetter(null);
+  });
+
+  it('Authentication: handles HTTP 401 and invokes onUnauthorized callback', async () => {
+    let unauthorizedTriggered = false;
+    client.setOnUnauthorized(() => {
+      unauthorizedTriggered = true;
+    });
+
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: 'Authentication required. Invalid or expired token.' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.listMeetings(10),
+      /Authentication required or session expired/
+    );
+
+    assert.equal(unauthorizedTriggered, true, 'onUnauthorized callback should be called on 401');
+    client.setOnUnauthorized(null);
   });
 });

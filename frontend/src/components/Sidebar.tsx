@@ -10,10 +10,12 @@ import {
   XCircle,
   Clock,
   Sun,
-  Moon
+  Moon,
+  LogOut,
 } from 'lucide-react';
 import { BackendConnectionState, MeetingListItem } from '../types';
 import { RecentMeetingsList } from './RecentMeetingsList';
+import { useAuth } from '../context/AuthContext';
 
 interface SidebarProps {
   connectionState: BackendConnectionState;
@@ -46,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRefreshMeetings,
   onDeleteMeeting,
 }) => {
+  const { user, logout } = useAuth();
   const navItems = [
     { id: 'dashboard', label: 'Workspace', icon: LayoutDashboard, enabled: true },
     { id: 'meetings', label: 'History', icon: Calendar, enabled: true },
@@ -129,6 +132,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Theme Switcher & Backend Status Footer */}
       <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-3">
+        {/* User Account Card */}
+        {user && (
+          <div className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 shadow-2xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                {user.email ? user.email.charAt(0).toUpperCase() : 'U'}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 truncate">
+                  {user.displayName || (user.email ? user.email.split('@')[0] : 'User')}
+                </p>
+                <p className="text-[9px] text-slate-400 truncate">{user.email || user.uid}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => logout()}
+              title="Sign Out"
+              className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Theme Toggle Button */}
         <button
           onClick={onToggleTheme}

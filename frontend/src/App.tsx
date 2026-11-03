@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './pages/Dashboard';
+import { AuthModal } from './components/AuthModal';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { 
   BackendConnectionState, 
   AnalysisState, 
@@ -12,10 +14,10 @@ import {
 } from './types';
 import { apiService } from './services/api';
 
-export function App() {
+function AppContent() {
+  const { user, loading: isAuthLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    // Default to light mode for a clean, modern SaaS appearance
     const saved = localStorage.getItem('meetmind_theme');
     if (saved) return saved === 'dark';
     return false;
@@ -47,7 +49,14 @@ export function App() {
     lastAnalyzedAt: null,
   });
 
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Fetch recent meetings for the authenticated user
   const fetchRecentMeetings = useCallback(async () => {
+    if (!user) {
+      setRecentMeetings([]);
+      return;
+    }
     setIsLoadingMeetings(true);
     setMeetingsError(null);
     try {
@@ -59,7 +68,7 @@ export function App() {
     } finally {
       setIsLoadingMeetings(false);
     }
-  }, []);
+  }, [user]);
 
   const checkBackendHealth = useCallback(async () => {
     setConnectionState((prev) => ({ ...prev, isLoading: true, error: undefined }));
@@ -71,8 +80,10 @@ export function App() {
         appName: data.app,
         lastChecked: new Date(),
       });
-      // Fetch meetings when backend is confirmed healthy
-      fetchRecentMeetings();
+      // Only fetch meetings when user is logged in
+      if (user) {
+        fetchRecentMeetings();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown connection error';
       setConnectionState({
@@ -82,7 +93,7 @@ export function App() {
         lastChecked: new Date(),
       });
     }
-  }, [fetchRecentMeetings]);
+  }, [fetchRecentMeetings, user]);
 
   useEffect(() => {
     // Sync theme class on <html>
@@ -97,13 +108,21 @@ export function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
-    // Initial health check on mount
+    // Health check on mount and interval
     checkBackendHealth();
-
-    // Periodic heartbeat check every 30 seconds
     const interval = setInterval(checkBackendHealth, 30000);
     return () => clearInterval(interval);
   }, [checkBackendHealth]);
+
+  // When user signs in or changes, refresh meetings and workspace
+  useEffect(() => {
+    if (user) {
+      fetchRecentMeetings();
+    } else {
+      setRecentMeetings([]);
+      handleResetMeeting();
+    }
+  }, [user, fetchRecentMeetings]);
 
   const toggleTheme = () => {
     setIsDarkMode((prev) => !prev);
@@ -170,7 +189,6 @@ export function App() {
         currentMeetingId: updated.meeting_id || currentMeetingId,
         clarificationError: null,
       }));
-      // Refresh meetings list after updating meeting with answers
       fetchRecentMeetings();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to resolve clarification answers.';
@@ -209,7 +227,6 @@ export function App() {
         lastAnalyzedAt: new Date(detail.updated_at),
       });
 
-      // Navigate to workspace view to inspect the retrieved meeting
       setActiveTab('dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : `Failed to load meeting ${meetingId}`;
@@ -244,9 +261,7 @@ export function App() {
     setAnalysisState((prev) => ({ ...prev, clarificationError: null }));
   };
 
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-
-  // Permanently delete a meeting from Firestore and update state
+  // Permanently delete a meeting from Firestore
   const handleDeleteMeeting = async (meetingId: string) => {
     try {
       await apiService.deleteMeeting(meetingId);
@@ -263,6 +278,21 @@ export function App() {
       throw err;
     }
   };
+
+  if (isAuthLoading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg animate-pulse">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+            Initializing MeetMind AI...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 antialiased transition-colors">
@@ -303,6 +333,9 @@ export function App() {
         onClearClarificationError={handleClearClarificationError}
       />
 
+      {/* Authentication Gateway for Unauthenticated Visitors */}
+      <AuthModal isOpen={!user} />
+
       {/* Floating Status Toast Notification */}
       <AnimatePresence>
         {toast && (
@@ -329,6 +362,14 @@ export function App() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+export function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 

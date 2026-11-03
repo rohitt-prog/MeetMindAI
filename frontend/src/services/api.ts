@@ -21,9 +21,52 @@ export const API_BASE_URL: string =
 
 class ApiService {
   private baseUrl: string;
+  private authTokenGetter: (() => Promise<string | null>) | null = null;
+  private onUnauthorized: (() => void) | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
+
+  /**
+   * Registers a token getter function that provides the current Firebase ID token.
+   */
+  setAuthTokenGetter(getter: () => Promise<string | null>): void {
+    this.authTokenGetter = getter;
+  }
+
+  /**
+   * Registers a callback invoked when any request receives an HTTP 401 Unauthorized response.
+   */
+  setOnUnauthorized(callback: () => void): void {
+    this.onUnauthorized = callback;
+  }
+
+  /**
+   * Asynchronously retrieves the Authorization header with the current Bearer token.
+   */
+  private async getAuthHeaders(): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {};
+    if (this.authTokenGetter) {
+      try {
+        const token = await this.authTokenGetter();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      } catch (err) {
+        console.warn('Failed to resolve auth token for API request:', err);
+      }
+    }
+    return headers;
+  }
+
+  /**
+   * Triggers the unauthorized handler when a 401 status is encountered.
+   */
+  private handleUnauthorizedResponse(status: number): void {
+    if (status === 401 && this.onUnauthorized) {
+      this.onUnauthorized();
+    }
   }
 
   /**
@@ -68,7 +111,7 @@ class ApiService {
   }
 
   /**
-   * Analyze a meeting transcript with Gemini AI.
+   * Analyze a meeting transcript with Gemini AI and persist with authenticated owner UID.
    * Calls POST /api/meetings/analyze
    */
   async analyzeMeeting(
@@ -77,6 +120,7 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/analyze`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
@@ -84,12 +128,19 @@ class ApiService {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
         let errorMessage = `Analysis request failed with status: ${response.status}`;
         try {
           const errorJson = (await response.json()) as { detail?: string | unknown };
@@ -143,6 +194,7 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/clarify`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
@@ -150,12 +202,19 @@ class ApiService {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
         let errorMessage = `Clarification update failed with status: ${response.status}`;
         try {
           const errorJson = (await response.json()) as { detail?: string | unknown };
@@ -171,7 +230,9 @@ class ApiService {
           // fallback
         }
 
-        if (response.status === 503) {
+        if (response.status === 404) {
+          errorMessage = 'Meeting not found or you do not have permission to update it.';
+        } else if (response.status === 503) {
           errorMessage = 'Gemini API key is not configured in backend/.env.';
         }
 
@@ -198,22 +259,32 @@ class ApiService {
   }
 
   /**
-   * Retrieve recent saved meetings from Firestore.
+   * Retrieve recent saved meetings owned by the authenticated user from Firestore.
    * Calls GET /api/meetings?limit={limit}
    */
   async listMeetings(limit: number = 20): Promise<MeetingListItem[]> {
     const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders,
+        },
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
+
         let errorMessage = `Failed to list meetings (${response.status})`;
         try {
           const errorJson = (await response.json()) as { detail?: string };
@@ -242,22 +313,32 @@ class ApiService {
   }
 
   /**
-   * Retrieve details of a specific saved meeting by ID.
+   * Retrieve details of a specific saved meeting owned by the user.
    * Calls GET /api/meetings/{meeting_id}
    */
   async getMeeting(meetingId: string): Promise<MeetingDetailResponse> {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders,
+        },
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
+
         let errorMessage = `Failed to get meeting (${response.status})`;
         try {
           const errorJson = (await response.json()) as { detail?: string };
@@ -265,6 +346,11 @@ class ApiService {
         } catch {
           // fallback
         }
+
+        if (response.status === 404) {
+          errorMessage = `Meeting with ID '${meetingId}' not found.`;
+        }
+
         throw new Error(errorMessage);
       }
 
@@ -287,23 +373,32 @@ class ApiService {
 
   /**
    * Permanently deletes a saved meeting by meeting ID from Cloud Firestore.
+   * Enforces ownership: returns 404 if not found or owned by another user.
    * Calls DELETE /api/meetings/{id}
    */
   async deleteMeeting(meetingId: string): Promise<MeetingDeleteResponse> {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
         method: 'DELETE',
         headers: {
           Accept: 'application/json',
+          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
+
         let errorMessage = `Failed to delete meeting with status: ${response.status}`;
         try {
           const errorJson = (await response.json()) as { detail?: string };
@@ -348,6 +443,7 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
@@ -355,12 +451,19 @@ class ApiService {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/pdf, application/json',
+          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
+
         let errorMessage = `PDF export failed with status: ${response.status}`;
         try {
           const errorJson = (await response.json()) as { detail?: string };
@@ -407,17 +510,25 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}/export/pdf`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const authHeaders = await this.getAuthHeaders();
 
     try {
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           Accept: 'application/pdf, application/json',
+          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
+        this.handleUnauthorizedResponse(response.status);
+
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in.');
+        }
+
         let errorMessage = `PDF export failed with status: ${response.status}`;
         try {
           const errorJson = (await response.json()) as { detail?: string };
@@ -425,6 +536,11 @@ class ApiService {
         } catch {
           // fallback
         }
+
+        if (response.status === 404) {
+          errorMessage = `Meeting '${meetingId}' not found or access denied.`;
+        }
+
         throw new Error(errorMessage);
       }
 

@@ -188,7 +188,7 @@ def test_export_saved_meeting_pdf_success():
         assert response.headers["content-type"] == "application/pdf"
         assert 'attachment; filename="meetmind_persisted_roadmap_sync.pdf"' in response.headers["content-disposition"]
         assert response.content.startswith(b"%PDF-")
-        mock_service.get_meeting.assert_called_once_with(meeting_id="m_persisted_999")
+        mock_service.get_meeting.assert_called_once_with(meeting_id="m_persisted_999", owner_uid="test_user_default")
 
 
 def test_export_saved_meeting_pdf_not_found():
