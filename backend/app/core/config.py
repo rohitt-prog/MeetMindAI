@@ -1,11 +1,11 @@
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import json
 
 class Settings(BaseSettings):
     APP_NAME: str = "MeetMind AI"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.2.0"
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"
     
@@ -16,6 +16,14 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+    # Google Gemini Configuration
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # Database Configuration (Future Phase)
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    DATABASE_NAME: str = "meetmind_ai"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

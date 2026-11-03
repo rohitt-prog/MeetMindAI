@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
@@ -32,7 +33,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Exception Handler
+# Exception handler for HTTP exceptions
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+# Global fallback Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception at {request.url.path}: {exc}", exc_info=True)
@@ -50,4 +60,5 @@ def root():
         "message": f"Welcome to {settings.APP_NAME} API",
         "docs": "/docs",
         "health": f"{settings.API_V1_STR}/health",
+        "analyze": f"{settings.API_V1_STR}/meetings/analyze",
     }

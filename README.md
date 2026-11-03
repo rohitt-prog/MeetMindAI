@@ -4,7 +4,8 @@
 [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript%20%7C%20Python-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Styling-Tailwind%20CSS-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
-[![Phase](https://img.shields.io/badge/Phase-1%3A%20Foundation%20%26%20Setup-indigo)](README.md)
+[![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%20API-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/)
+[![Phase](https://img.shields.io/badge/Phase-2%3A%20Gemini%20AI%20Backend-indigo)](README.md)
 
 **MeetMind AI** is an intelligent assistant engineered to bridge the gap between spoken or transcribed meeting conversations and structured execution. It converts raw, unstructured meeting transcripts into actionable summaries, decisions, explicit task ownership, strict deadlines, and clarifying questions.
 
@@ -41,15 +42,16 @@ MeetMind AI automates the extraction and structuring of these elements, turning 
 - **Icons**: Lucide React
 - **HTTP Client**: Centralized Fetch API client (`apiService`)
 
-### Backend (Implemented in Phase 1)
+### Backend (Implemented in Phase 1 & Phase 2)
 - **Framework**: Python 3.11+ with FastAPI
 - **Server**: Uvicorn (ASGI)
+- **AI Integration**: Google Gemini API via official `google-genai` Python SDK
+- **Model**: `gemini-2.5-flash` (configurable)
 - **Validation & Settings**: Pydantic v2 & `pydantic-settings`
-- **Testing**: Pytest & HTTPX TestClient
+- **Testing**: Pytest & HTTPX TestClient with mocked Gemini calls
 - **Middleware**: Fast CORS middleware configured for Vite development servers
 
-### AI & Data Layers (Reserved for Future Phases)
-- **AI Engine (Phase 2)**: Google Gemini API using official Python SDK (`google-genai`)
+### Data Layer (Reserved for Future Phase)
 - **Database (Phase 3)**: MongoDB for persistent meeting records and action items
 
 ---
@@ -64,8 +66,11 @@ MeetMind AI automates the extraction and structuring of these elements, turning 
 | **Frontend Dashboard UI** | Completed | Modern dark navy/slate dashboard with sidebar, stats cards, and meeting input. |
 | **Client-Server Handshake** | Completed | Centralized `apiService` pings `/api/health` and displays real-time connection status. |
 | **Transcript Input Form** | Completed | Title, transcript textarea with word/character counter, and sample transcript loader. |
-| **Gemini AI Integration** | *Planned (Phase 2)* | Extraction of summaries, decisions, action items, and clarification queries. |
+| **Gemini AI Backend Integration** | Completed | `POST /api/meetings/analyze` converts transcripts into structured JSON via `google-genai`. |
+| **Anti-Hallucination Guardrails** | Completed | Extraction rules prevent inventing owners/deadlines; uses `null` for unassigned fields. |
+| **Clarification Query Engine** | Completed | Automatically sets `clarification_required` and generates proactive questions for ambiguities. |
 | **MongoDB Database Storage** | *Planned (Phase 3)* | Persistent storage for meeting archives, action item statuses, and user settings. |
+| **Frontend AI Analysis Integration**| *Planned (Phase 3)* | Connect React transcript form directly to the Gemini analysis endpoint. |
 
 ---
 
@@ -82,15 +87,19 @@ flowchart LR
     subgraph Server ["Backend (FastAPI + Uvicorn)"]
         Router["API Router (/api)"]
         HealthRoute["GET /api/health"]
+        AnalyzeRoute["POST /api/meetings/analyze"]
         HealthService["HealthService"]
+        GeminiService["GeminiService"]
         Config["Settings (Pydantic BaseSettings)"]
         
         Router --> HealthRoute
+        Router --> AnalyzeRoute
         HealthRoute --> HealthService
-        HealthService --> Config
+        AnalyzeRoute --> GeminiService
+        GeminiService --> Config
     end
 
-    subgraph FutureAI ["AI Layer (Phase 2)"]
+    subgraph AI ["AI Layer (Phase 2 Implemented)"]
         Gemini["Google Gemini API (google-genai)"]
     end
 
@@ -99,7 +108,7 @@ flowchart LR
     end
 
     ClientService -- "HTTP / REST (CORS)" --> Router
-    Server -. "Phase 2" .-> Gemini
+    GeminiService -- "google-genai SDK" --> Gemini
     Server -. "Phase 3" .-> MongoDB
 ```
 
@@ -114,7 +123,6 @@ meetmind-ai/
 │   ├── public/                 # Static assets
 │   ├── src/
 │   │   ├── components/         # Reusable UI components
-│   │   │   ├── ConnectionBanner.tsx
 │   │   │   ├── EmptyState.tsx
 │   │   │   ├── Header.tsx
 │   │   │   ├── NewMeetingSection.tsx
@@ -145,25 +153,29 @@ meetmind-ai/
 │   │   ├── api/
 │   │   │   ├── routes/
 │   │   │   │   ├── __init__.py
-│   │   │   │   └── health.py   # GET /api/health route
+│   │   │   │   ├── health.py   # GET /api/health route
+│   │   │   │   └── meetings.py # POST /api/meetings/analyze route
 │   │   │   ├── __init__.py
 │   │   │   └── router.py       # API router registration
 │   │   ├── core/
 │   │   │   ├── __init__.py
-│   │   │   └── config.py       # Pydantic BaseSettings & CORS logic
+│   │   │   └── config.py       # Pydantic BaseSettings & Gemini config
 │   │   ├── schemas/
 │   │   │   ├── __init__.py
-│   │   │   └── health.py       # Pydantic schemas for health responses
+│   │   │   ├── health.py       # Pydantic schemas for health responses
+│   │   │   └── meeting.py      # Request & Response schemas for analysis
 │   │   ├── services/
 │   │   │   ├── __init__.py
+│   │   │   ├── gemini_service.py # Gemini transcript analysis & parsing
 │   │   │   └── health_service.py # Health check business logic
 │   │   ├── __init__.py
 │   │   └── main.py             # FastAPI entrypoint, middleware, errors
 │   ├── tests/
 │   │   ├── __init__.py
-│   │   └── test_health.py      # Pytest test suite for health & CORS
+│   │   ├── test_health.py      # Health & CORS test suite
+│   │   └── test_meetings.py    # Gemini analysis & validation test suite
 │   ├── .env.example            # Backend environment variable template
-│   └── requirements.txt        # Python dependencies
+│   └── requirements.txt        # Python dependencies (includes google-genai)
 │
 ├── docs/
 │   └── architecture.md         # System design & architecture details
@@ -182,7 +194,7 @@ Both the frontend and backend utilize `.env.example` templates. **Never commit a
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=your_selected_gemini_model
+GEMINI_MODEL=gemini-2.5-flash
 MONGODB_URI=mongodb://localhost:27017
 DATABASE_NAME=meetmind_ai
 ```
@@ -198,19 +210,82 @@ To configure local environments:
 # Backend
 cp backend/.env.example backend/.env
 
+# Add your Gemini API key to backend/.env:
+# GEMINI_API_KEY=AIzaSy...
+
 # Frontend
 cp frontend/.env.example frontend/.env
 ```
 
 ---
 
-## 8. Installation & Setup Guide
+## 8. Gemini Meeting Analysis API
+
+### Endpoint Specification
+
+`POST /api/meetings/analyze`
+
+**Content-Type**: `application/json`
+
+#### Request Schema
+
+| Field | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `transcript` | `string` | **Yes** | Raw meeting transcript or notes (must not be empty or whitespace). |
+| `title` | `string` | No | Optional title or topic of the meeting. |
+
+#### Example Request (Fictional Content)
+
+```bash
+curl -X POST http://localhost:8000/api/meetings/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Mobile App Redesign Sync",
+    "transcript": "Sarah: Let us review the blockers for the milestone release.\nDavid: The Figma tokens are ready. I need Alex to confirm the GraphQL schema by Wednesday 4 PM.\nAlex: I will finalize the endpoint by Wednesday 4 PM once security signs off.\nPriya: We need test credentials for the staging sandbox. Who is provisioning them?\nSarah: Someone should provision staging access by tomorrow morning."
+  }'
+```
+
+#### Example Response (Fictional Content)
+
+```json
+{
+  "summary": "The team reviewed milestone blockers for the mobile app redesign, establishing commitments for GraphQL schema finalization and identifying an unassigned deliverable for staging sandbox credentials.",
+  "discussion_points": [
+    "Figma design system token handoff from David",
+    "GraphQL schema updates for user preferences pending security approval",
+    "Staging sandbox test credentials requirement"
+  ],
+  "decisions": [
+    "Alex will finalize GraphQL endpoints by Wednesday at 4 PM"
+  ],
+  "action_items": [
+    {
+      "task": "Confirm and finalize GraphQL schema changes for user preferences",
+      "owner": "Alex",
+      "deadline": "Wednesday 4 PM",
+      "status": "pending"
+    },
+    {
+      "task": "Provision test credentials for the staging sandbox environment",
+      "owner": null,
+      "deadline": "Tomorrow morning",
+      "status": "pending"
+    }
+  ],
+  "clarification_required": true,
+  "clarification_question": "Who is specifically responsible for provisioning the staging sandbox test credentials by tomorrow morning?"
+}
+```
+
+---
+
+## 9. Installation & Setup Guide
 
 ### Prerequisites
 - **Node.js**: v18+ (tested on Node v26)
 - **npm**: v9+ (tested on npm 11)
 - **Python**: 3.11+
-- **Git**
+- **Google Gemini API Key**: Obtainable from [Google AI Studio](https://aistudio.google.com/)
 
 ---
 
@@ -233,7 +308,7 @@ cp frontend/.env.example frontend/.env
    pip install -r requirements.txt
    ```
 
-4. **Run unit tests**:
+4. **Run the automated test suite**:
    ```bash
    pytest tests/
    ```
@@ -245,6 +320,7 @@ cp frontend/.env.example frontend/.env
 
 The backend server is accessible at `http://localhost:8000`.
 - Health Endpoint: `http://localhost:8000/api/health`
+- Meeting Analysis Endpoint: `http://localhost:8000/api/meetings/analyze`
 - Interactive Swagger Docs: `http://localhost:8000/docs`
 - ReDoc Docs: `http://localhost:8000/redoc`
 
@@ -262,7 +338,7 @@ The backend server is accessible at `http://localhost:8000`.
    npm install
    ```
 
-3. **Build the production bundle (type check + build)**:
+3. **Build the production bundle**:
    ```bash
    npm run build
    ```
@@ -276,42 +352,7 @@ The frontend dashboard will be available at `http://localhost:5173`.
 
 ---
 
-## 9. Running Frontend and Backend Concurrently
-
-For optimal evaluation, open two terminal windows:
-
-**Terminal 1 (Backend)**:
-```bash
-cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
-```
-
-**Terminal 2 (Frontend)**:
-```bash
-cd frontend
-npm run dev
-```
-
-Visit `http://localhost:5173` in your browser. The dashboard will automatically detect the backend and display **"Backend: Online (200 OK)"** with an active emerald indicator.
-
----
-
-## 10. GitHub Setup & Remote Connection
-
-If you are cloning this repository or pushing to an existing GitHub repository, use the following commands:
-
-```bash
-# Add your GitHub repository as the remote
-git remote add origin <YOUR_GITHUB_REPOSITORY_URL>
-
-# Push to the main branch
-git push -u origin main
-```
-
----
-
-## 11. Development Roadmap
+## 10. Development Roadmap
 
 - [x] **Phase 1: Project Foundation & Handshake**
   - Project architecture & directory structure
@@ -319,15 +360,18 @@ git push -u origin main
   - React + TypeScript + Tailwind CSS dashboard UI
   - Real-time client-to-server health handshake
   - Clean Git repository setup and comprehensive documentation
-- [ ] **Phase 2: Google Gemini AI Integration**
-  - Integrate `google-genai` SDK
-  - Prompt engineering for structured extraction (summaries, decisions, action items, deadlines)
-  - Proactive clarification query generation for ambiguous tasks
-  - Pydantic response models for structured outputs
+- [x] **Phase 2: Google Gemini AI Integration**
+  - Integrate official `google-genai` Python SDK
+  - Pydantic schema contracts for `MeetingAnalysisRequest` and `MeetingAnalysisResponse`
+  - Anti-hallucination prompt engineering (enforce `null` for unstated owners/deadlines)
+  - Proactive clarification query engine for ambiguous requirements
+  - Robust JSON parsing with markdown-fence sanitization
+  - Comprehensive unit test suite with mocked Gemini calls
 - [ ] **Phase 3: Database & Persistence Layer**
   - MongoDB connection and schema definitions
   - Meeting transcript archiving and retrieval
   - Action item status tracking (pending, completed, blocked)
+  - Connect React frontend directly to `POST /api/meetings/analyze`
 - [ ] **Phase 4: Advanced Features & Export**
   - Export action items to markdown / CSV / Jira format
   - Audio transcript upload / speech-to-text pipeline
