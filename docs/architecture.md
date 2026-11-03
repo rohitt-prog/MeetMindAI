@@ -64,9 +64,10 @@ graph TD
 
 | Route | Method | Purpose | Implementation Phase |
 | :--- | :--- | :--- | :--- |
-| `/api/health` | `GET` | System heartbeat & availability check | **Phase 1 (Implemented)** |
-| `/api/meetings/analyze` | `POST` | Transcript parsing & ambiguity detection | **Phase 2 & 3 (Implemented)** |
-| `/api/meetings/clarify` | `POST` | Re-evaluation with user clarification answers | **Phase 3 & 4 (Implemented)** |
+| `/health` | `GET` | Root health check & availability probe | **Phase 5 (Implemented)** |
+| `/api/health` | `GET` | API health check & application metadata | **Phase 1 & 5 (Implemented)** |
+| `/api/meetings/analyze` | `POST` | Transcript parsing & ambiguity detection | **Phase 2, 3, 5 (Implemented)** |
+| `/api/meetings/clarify` | `POST` | Re-evaluation with user clarification answers | **Phase 3, 4, 5 (Implemented)** |
 | `/api/meetings` | `GET/POST` | Meeting storage & historical retrieval | Planned (Phase 6) |
 | `/api/actions` | `GET/PATCH` | Action item tracking & status updates | Planned (Phase 6) |
 
@@ -109,10 +110,12 @@ sequenceDiagram
 4. **Decision vs. Suggestion (`decision_vs_suggestion`)**: Brainstorming proposals or ideas (e.g., *"We should consider launching next month"*) are strictly excluded from confirmed `decisions` unless validated.
 5. **Missing Context (`missing_context`)**: Statements that lack necessary prerequisites or contextual background.
 
-### 4.3 Safe Non-Destructive Updates
-- Unanswered or unrelated action items and decisions are untouched.
-- When an answer is vague or uncertain (e.g., *"Still undecided"*), the ambiguity is preserved with `resolved: false`.
-- Only when all clarifications have `resolved: true` does `clarification_required` flip to `false` and `clarification_question` reset to `null`.
+### 4.3 Safe Non-Destructive Updates & Drop Prevention (Phase 5)
+- **Automatic Merge Safeguard**: If an LLM response during clarification omits unrelated action items, decisions, or discussion points from the original analysis, the backend post-processor automatically detects the omission and preserves the original items.
+- **Clarification Preservation**: Any unaddressed clarification from the original analysis is retained in its `resolved: false` state if omitted by the model.
+- **Ambiguity Continuity**: When an answer is vague or uncertain (e.g., *"Still undecided"*), the ambiguity is preserved with `resolved: false`.
+- **Status Coherence**: Only when all clarifications have `resolved: true` does `clarification_required` flip to `false` and `clarification_question` reset to `null`.
+- **Batch Processing**: The endpoint supports multiple clarification answers in a single request, allowing the client to resolve multiple ambiguities simultaneously.
 
 ---
 

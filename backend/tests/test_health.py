@@ -14,6 +14,17 @@ def test_health_check():
         "app": "MeetMind AI"
     }
 
+def test_root_health_endpoint():
+    """
+    Test that the root /health endpoint returns 200 OK with expected payload.
+    """
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "app": "MeetMind AI"
+    }
+
 def test_root_endpoint():
     """
     Test root welcome endpoint.
@@ -23,6 +34,7 @@ def test_root_endpoint():
     data = response.json()
     assert "message" in data
     assert data["health"] == "/api/health"
+    assert data["root_health"] == "/health"
 
 def test_cors_headers():
     """

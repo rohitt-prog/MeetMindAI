@@ -795,3 +795,276 @@ def test_clarify_gemini_failure_and_malformed_response():
     finally:
         gemini_service._client = original_client
         gemini_service._api_key = original_key
+
+
+# ==============================================================================
+# Phase 5 End-to-End Integration & Multi-Answer Tests
+# ==============================================================================
+
+def test_clarify_batch_multiple_answers():
+    """
+    Test submitting multiple clarification answers in a single request.
+    Verifies that all answers are processed and status is updated appropriately.
+    """
+    multi_clarif_insights = {
+        "summary": "Team sync discussing backend tasks and deadlines.",
+        "discussion_points": ["GraphQL schema", "Database migration"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Review GraphQL schema changes",
+                "owner": None,
+                "deadline": None,
+                "status": "pending",
+            },
+            {
+                "id": "action_2",
+                "task": "Execute database migration",
+                "owner": None,
+                "deadline": None,
+                "status": "pending",
+            },
+        ],
+        "clarification_required": True,
+        "clarification_question": "Who will review the GraphQL schema?",
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "ownership",
+                "original_statement": "Someone review the schema.",
+                "explanation": "No owner assigned.",
+                "question": "Who will review the GraphQL schema?",
+                "related_action_item_id": "action_1",
+                "resolved": False,
+            },
+            {
+                "id": "clarif_2",
+                "category": "ownership",
+                "original_statement": "Someone should run the migration.",
+                "explanation": "No owner assigned.",
+                "question": "Who will run the migration?",
+                "related_action_item_id": "action_2",
+                "resolved": False,
+            },
+        ],
+    }
+
+    resolved_batch_insights = {
+        "summary": "Team sync: Sarah assigned to schema review and David to database migration.",
+        "discussion_points": ["GraphQL schema", "Database migration"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Review GraphQL schema changes",
+                "owner": "Sarah",
+                "deadline": "Friday 5 PM",
+                "status": "pending",
+            },
+            {
+                "id": "action_2",
+                "task": "Execute database migration",
+                "owner": "David",
+                "deadline": "Saturday 2 AM",
+                "status": "pending",
+            },
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "ownership",
+                "original_statement": "Someone review the schema.",
+                "explanation": "No owner assigned.",
+                "question": "Who will review the GraphQL schema?",
+                "related_action_item_id": "action_1",
+                "resolved": True,
+            },
+            {
+                "id": "clarif_2",
+                "category": "ownership",
+                "original_statement": "Someone should run the migration.",
+                "explanation": "No owner assigned.",
+                "question": "Who will run the migration?",
+                "related_action_item_id": "action_2",
+                "resolved": True,
+            },
+        ],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(resolved_batch_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/clarify",
+            json={
+                "analysis": multi_clarif_insights,
+                "answers": [
+                    {
+                        "clarification_id": "clarif_1",
+                        "answer": "Sarah will review the schema by Friday 5 PM.",
+                    },
+                    {
+                        "clarification_id": "clarif_2",
+                        "answer": "David will run the migration on Saturday at 2 AM.",
+                    },
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["action_items"][0]["owner"] == "Sarah"
+        assert data["action_items"][1]["owner"] == "David"
+        assert all(c["resolved"] is True for c in data["clarifications"])
+        assert data["clarification_required"] is False
+        assert data["clarification_question"] is None
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_clarify_preserves_unrelated_action_items_and_clarifications():
+    """
+    Test that when Gemini re-evaluation omits unrelated action items or unanswered clarifications,
+    post-processing reliably preserves them without data loss.
+    """
+    initial_insights = {
+        "summary": "Original summary.",
+        "discussion_points": ["Topic A", "Topic B", "Topic C"],
+        "decisions": ["Decision 1"],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Keep this unrelated task untouched",
+                "owner": "Marcus",
+                "deadline": "Thursday",
+                "status": "pending",
+            },
+            {
+                "id": "action_2",
+                "task": "Task needing owner",
+                "owner": None,
+                "deadline": "Friday",
+                "status": "pending",
+            },
+        ],
+        "clarification_required": True,
+        "clarification_question": "Who owns action_2?",
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "ownership",
+                "original_statement": "Statement 1",
+                "explanation": "Explanation 1",
+                "question": "Who owns action_2?",
+                "related_action_item_id": "action_2",
+                "resolved": False,
+            },
+            {
+                "id": "clarif_2",
+                "category": "deadline",
+                "original_statement": "Statement 2",
+                "explanation": "Explanation 2",
+                "question": "What is the deadline for Topic C?",
+                "related_action_item_id": None,
+                "resolved": False,
+            },
+        ],
+    }
+
+    # Simulate Gemini returning ONLY the clarified action item (dropping action_1 and clarif_2)
+    truncated_gemini_output = {
+        "summary": "Updated summary with Elena.",
+        "discussion_points": ["Topic A"],  # Omitted Topic B & C
+        "decisions": ["Decision 1"],
+        "action_items": [
+            {
+                "id": "action_2",
+                "task": "Task needing owner",
+                "owner": "Elena",
+                "deadline": "Friday",
+                "status": "pending",
+            }
+            # Note: action_1 is omitted by Gemini!
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "ownership",
+                "original_statement": "Statement 1",
+                "explanation": "Explanation 1",
+                "question": "Who owns action_2?",
+                "related_action_item_id": "action_2",
+                "resolved": True,
+            }
+            # Note: clarif_2 is omitted by Gemini!
+        ],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(truncated_gemini_output)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/clarify",
+            json={
+                "analysis": initial_insights,
+                "answers": [
+                    {
+                        "clarification_id": "clarif_1",
+                        "answer": "Elena will handle action_2.",
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check that action_1 was PRESERVED despite being omitted by Gemini
+        action_ids = [a["id"] for a in data["action_items"]]
+        assert "action_1" in action_ids
+        assert "action_2" in action_ids
+        action_2 = next(a for a in data["action_items"] if a["id"] == "action_2")
+        assert action_2["owner"] == "Elena"
+
+        # Check that clarif_2 was PRESERVED in its unresolved state
+        clarif_ids = [c["id"] for c in data["clarifications"]]
+        assert "clarif_1" in clarif_ids
+        assert "clarif_2" in clarif_ids
+        c1 = next(c for c in data["clarifications"] if c["id"] == "clarif_1")
+        c2 = next(c for c in data["clarifications"] if c["id"] == "clarif_2")
+        assert c1["resolved"] is True
+        assert c2["resolved"] is False
+
+        # Overall clarification_required must still be True because clarif_2 is unresolved
+        assert data["clarification_required"] is True
+        assert data["clarification_question"] == "What is the deadline for Topic C?"
+
+        # Discussion points must be preserved
+        assert "Topic B" in data["discussion_points"]
+        assert "Topic C" in data["discussion_points"]
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key

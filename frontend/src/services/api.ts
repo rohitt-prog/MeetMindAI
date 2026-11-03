@@ -3,14 +3,17 @@ import {
   MeetingAnalysisRequest,
   MeetingAnalysisResponse,
   MeetingClarificationRequest,
-} from '../types';
+} from '../types/index';
 
 /**
  * Base URL for the MeetMind AI backend API.
  * Configured via Vite environment variable VITE_API_BASE_URL.
  */
 export const API_BASE_URL: string =
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+  (typeof import.meta !== 'undefined' &&
+    import.meta.env &&
+    import.meta.env.VITE_API_BASE_URL) ||
+  'http://localhost:8000';
 
 class ApiService {
   private baseUrl: string;
@@ -21,21 +24,27 @@ class ApiService {
 
   /**
    * Check backend service health status.
-   * Calls GET /api/health
+   * Calls GET /api/health (falls back to GET /health if needed).
    */
   async getHealth(): Promise<HealthCheckResponse> {
-    const url = `${this.baseUrl}/api/health`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
-      const response = await fetch(url, {
+      let response = await fetch(`${this.baseUrl}/api/health`, {
         method: 'GET',
-        headers: {
-          Accept: 'application/json',
-        },
+        headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
+
+      // Graceful fallback to root /health if /api/health returned 404
+      if (response.status === 404) {
+        response = await fetch(`${this.baseUrl}/health`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+      }
 
       if (!response.ok) {
         throw new Error(
@@ -44,6 +53,11 @@ class ApiService {
       }
 
       return (await response.json()) as HealthCheckResponse;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('Health check request timed out after 5 seconds.');
+      }
+      throw err;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -57,6 +71,8 @@ class ApiService {
     request: MeetingAnalysisRequest
   ): Promise<MeetingAnalysisResponse> {
     const url = `${this.baseUrl}/api/meetings/analyze`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const response = await fetch(url, {
@@ -66,6 +82,7 @@ class ApiService {
           Accept: 'application/json',
         },
         body: JSON.stringify(request),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -75,7 +92,10 @@ class ApiService {
           if (typeof errorJson.detail === 'string') {
             errorMessage = errorJson.detail;
           } else if (Array.isArray(errorJson.detail)) {
-            errorMessage = errorJson.detail.map((e: { msg?: string }) => e.msg || '').join(', ');
+            errorMessage = errorJson.detail
+              .map((e: { msg?: string }) => e.msg || '')
+              .filter(Boolean)
+              .join(', ');
           }
         } catch {
           // If response body is not JSON, use default error message
@@ -93,6 +113,9 @@ class ApiService {
       return (await response.json()) as MeetingAnalysisResponse;
     } catch (err: unknown) {
       if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Analysis request timed out after 60 seconds. Please check your network and backend status.');
+        }
         if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
           throw new Error(
             `Unable to connect to MeetMind AI backend at ${this.baseUrl}. Please verify the server is running.`
@@ -101,6 +124,8 @@ class ApiService {
         throw err;
       }
       throw new Error('An unexpected error occurred while analyzing the meeting.');
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -112,6 +137,8 @@ class ApiService {
     request: MeetingClarificationRequest
   ): Promise<MeetingAnalysisResponse> {
     const url = `${this.baseUrl}/api/meetings/clarify`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const response = await fetch(url, {
@@ -121,6 +148,7 @@ class ApiService {
           Accept: 'application/json',
         },
         body: JSON.stringify(request),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -129,6 +157,11 @@ class ApiService {
           const errorJson = (await response.json()) as { detail?: string | unknown };
           if (typeof errorJson.detail === 'string') {
             errorMessage = errorJson.detail;
+          } else if (Array.isArray(errorJson.detail)) {
+            errorMessage = errorJson.detail
+              .map((e: { msg?: string }) => e.msg || '')
+              .filter(Boolean)
+              .join(', ');
           }
         } catch {
           // fallback
@@ -144,6 +177,9 @@ class ApiService {
       return (await response.json()) as MeetingAnalysisResponse;
     } catch (err: unknown) {
       if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Clarification request timed out after 60 seconds.');
+        }
         if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
           throw new Error(
             `Unable to reach backend at ${this.baseUrl} to submit clarifications.`
@@ -152,6 +188,8 @@ class ApiService {
         throw err;
       }
       throw new Error('An unexpected error occurred while submitting clarification answers.');
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

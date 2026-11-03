@@ -6,6 +6,8 @@ import logging
 
 from app.core.config import settings
 from app.api.router import api_router
+from app.schemas.health import HealthResponse
+from app.services.health_service import HealthService
 
 # Configure basic logging
 logging.basicConfig(
@@ -54,12 +56,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include API Router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["Health"],
+    summary="Root Service Health Check",
+    description="Returns the operational status of the MeetMind AI backend service.",
+)
+def root_health() -> HealthResponse:
+    """
+    Root health check endpoint to verify backend availability.
+    """
+    return HealthService.get_health_status()
+
 @app.get("/", tags=["Root"])
 def root():
     return {
         "message": f"Welcome to {settings.APP_NAME} API",
         "docs": "/docs",
         "health": f"{settings.API_V1_STR}/health",
+        "root_health": "/health",
         "analyze": f"{settings.API_V1_STR}/meetings/analyze",
         "clarify": f"{settings.API_V1_STR}/meetings/clarify",
     }

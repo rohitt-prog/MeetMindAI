@@ -5,7 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript%20%7C%20Python-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Styling-Tailwind%20CSS-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%20API-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/)
-[![Phase](https://img.shields.io/badge/Phase-4%3A%20Frontend%20UI%20Implementation-indigo)](README.md)
+[![Phase](https://img.shields.io/badge/Phase-5%3A%20End--to--End%20Integration%20%26%20Validation-indigo)](README.md)
 
 **MeetMind AI** is an intelligent assistant engineered to bridge the gap between spoken or transcribed meeting conversations and structured execution. It converts raw, unstructured meeting transcripts into actionable summaries, decisions, explicit task ownership, strict deadlines, and clarifying questions.
 
@@ -77,6 +77,7 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 | **Structured Results View (UI)** | Completed | Executive summary, discussion points, confirmed decisions, and action items with status tags. |
 | **Interactive Clarification Cards (UI)** | Completed | In-place Q&A cards with category badges, input fields, and seamless re-evaluation without data loss. |
 | **Light & Dark Theme Toggle (UI)** | Completed | Clean SaaS light theme (default) and dark mode with persistent `localStorage` synchronization. |
+| **End-to-End Validation & Guardrails** | Completed | Live Gemini validation, root `/health` & `/api/health`, multi-answer batch submissions, and drop-prevention safeguards. |
 | **MongoDB Database Storage** | *Planned (Phase 6)* | Persistent storage for meeting archives, action item statuses, and history. |
 | **PDF & Markdown Export** | *Planned (Phase 7)* | Downloadable summaries and structured meeting action plans. |
 
@@ -473,9 +474,14 @@ The frontend dashboard will be available at `http://localhost:5173`.
   - Seamless in-place re-evaluation via `POST /api/meetings/clarify` with inline error recovery and state preservation
   - Dual theme architecture: clean, high-contrast light productivity theme (default) + dark theme with `localStorage` persistence
   - Live backend heartbeat connectivity pill and responsive multi-device navigation
-- [ ] **Phase 5: Advanced AI Features & Audio Ingestion**
-  - Audio file transcription and speaker diarization
-  - Multi-meeting comparison and agenda alignment
+- [x] **Phase 5: End-to-End Integration & Validation**
+  - Full end-to-end integration verified via automated test suites and live Google Gemini API calls
+  - Dual health endpoints supported (`GET /health` and `GET /api/health`) for maximum ecosystem compatibility
+  - Multi-answer batch clarification submission in frontend and backend
+  - Non-destructive post-processing guardrails preserving unrelated action items, decisions, and unaddressed ambiguities
+  - 60-second AbortController request timeout and network resilience handling
+  - Frontend integration test suite with native `node:test` (`npm test`, 8/8 tests passing)
+  - 22 backend automated tests (`pytest`, 22/22 tests passing)
 - [ ] **Phase 6: MongoDB Persistence & History**
   - MongoDB connection, ODM models, and database migrations
   - Historical meeting transcript archiving and search

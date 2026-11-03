@@ -66,3 +66,4 @@ export const AnalysisLoadingState: React.FC<AnalysisLoadingStateProps> = ({
     </div>
   );
 };
+

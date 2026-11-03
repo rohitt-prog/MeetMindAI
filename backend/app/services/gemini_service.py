@@ -237,21 +237,52 @@ class GeminiService:
         original_analysis: Optional[MeetingAnalysisResponse] = None,
     ) -> MeetingAnalysisResponse:
         """
-        Guarantees stable action item IDs and consistent clarification status.
+        Guarantees stable action item IDs, preserves unrelated items,
+        and enforces consistent clarification status.
         """
-        # Ensure every action item has an ID
+        # Ensure every new action item has an ID
         for idx, item in enumerate(analysis.action_items, start=1):
             if not item.id:
                 item.id = f"action_{idx}"
 
-        # If original analysis is provided, verify IDs and unresolved state
+        # If original analysis is provided, safeguard against accidental LLM drops
         if original_analysis:
-            # Map original clarification IDs
-            orig_map = {c.id: c for c in original_analysis.clarifications}
+            # 1. Merge and preserve clarifications
+            updated_clarifs_by_id = {c.id: c for c in analysis.clarifications}
+            merged_clarifications = []
+            seen_ids = set()
+
+            # Preserve order from original, updating with new resolution state
+            for orig_c in original_analysis.clarifications:
+                if orig_c.id in updated_clarifs_by_id:
+                    merged_clarifications.append(updated_clarifs_by_id[orig_c.id])
+                else:
+                    # Model omitted this unaddressed clarification; preserve it
+                    merged_clarifications.append(orig_c)
+                seen_ids.add(orig_c.id)
+
+            # Append any genuinely new clarifications returned by model
             for c in analysis.clarifications:
-                if c.id not in orig_map:
-                    # In case model altered the ID, preserve original if count matches
-                    continue
+                if c.id not in seen_ids:
+                    merged_clarifications.append(c)
+                    seen_ids.add(c.id)
+
+            analysis.clarifications = merged_clarifications
+
+            # 2. Preserve unrelated action items that may have been omitted by LLM
+            existing_action_ids = {a.id for a in analysis.action_items if a.id}
+            existing_action_tasks = {a.task.strip().lower() for a in analysis.action_items}
+            for orig_item in original_analysis.action_items:
+                if orig_item.id and orig_item.id not in existing_action_ids:
+                    # Check if same task under different ID already present
+                    if orig_item.task.strip().lower() not in existing_action_tasks:
+                        analysis.action_items.append(orig_item)
+
+            # 3. Preserve discussion points if LLM response truncated them
+            existing_dp_lower = {dp.strip().lower() for dp in analysis.discussion_points}
+            for orig_dp in original_analysis.discussion_points:
+                if orig_dp.strip().lower() not in existing_dp_lower:
+                    analysis.discussion_points.append(orig_dp)
 
         # Evaluate unresolved clarifications
         unresolved = [c for c in analysis.clarifications if not c.resolved]

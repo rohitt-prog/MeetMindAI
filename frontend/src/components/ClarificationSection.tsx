@@ -33,6 +33,9 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
 
   const unresolvedItems = clarifications.filter((c) => !c.resolved);
   const resolvedItems = clarifications.filter((c) => c.resolved);
+  const answeredUnresolved = unresolvedItems.filter(
+    (item) => (answers[item.id] || '').trim().length > 0
+  );
 
   const handleInputChange = (id: string, value: string) => {
     setAnswers((prev) => ({ ...prev, [id]: value }));
@@ -52,6 +55,29 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
       setAnswers((prev) => {
         const next = { ...prev };
         delete next[clarificationId];
+        return next;
+      });
+    } finally {
+      setSubmittingId(null);
+    }
+  };
+
+  const handleSubmitBatch = async () => {
+    const batch = answeredUnresolved.map((item) => ({
+      clarification_id: item.id,
+      answer: answers[item.id].trim(),
+    }));
+    if (batch.length === 0) return;
+
+    setSubmittingId('__all__');
+    try {
+      await onClarify(batch);
+      // Clear submitted inputs on success
+      setAnswers((prev) => {
+        const next = { ...prev };
+        for (const item of batch) {
+          delete next[item.clarification_id];
+        }
         return next;
       });
     } finally {
@@ -113,7 +139,7 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
   return (
     <section className="space-y-4">
       {/* Header bar */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <HelpCircle className="w-4 h-4 text-amber-500" />
           <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -124,11 +150,33 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
           </span>
         </div>
 
-        {unresolvedItems.length > 0 && (
-          <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
-            Action Required
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {answeredUnresolved.length > 1 && (
+            <button
+              type="button"
+              disabled={isClarifying}
+              onClick={handleSubmitBatch}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xs transition-colors disabled:opacity-40"
+            >
+              {submittingId === '__all__' ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Submitting All...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-3 h-3" />
+                  <span>Submit All Answers ({answeredUnresolved.length})</span>
+                </>
+              )}
+            </button>
+          )}
+          {unresolvedItems.length > 0 && (
+            <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
+              Action Required
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Global Clarification Error if any */}
@@ -279,3 +327,4 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
     </section>
   );
 };
+
