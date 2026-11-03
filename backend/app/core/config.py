@@ -25,9 +25,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
-    # Database Configuration (Future Phase)
-    MONGODB_URI: str = "mongodb://localhost:27017"
-    DATABASE_NAME: str = "meetmind_ai"
+    # Firebase Cloud Firestore Configuration (Phase 6)
+    FIREBASE_PROJECT_ID: Optional[str] = None
+    FIREBASE_CREDENTIALS_PATH: Optional[str] = None
+    FIREBASE_CREDENTIALS_JSON: Optional[str] = None
+    FIRESTORE_COLLECTION_MEETINGS: str = "meetings"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

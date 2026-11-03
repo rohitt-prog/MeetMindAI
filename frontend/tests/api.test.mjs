@@ -160,6 +160,86 @@ class ApiServiceTestClient {
       clearTimeout(timeoutId);
     }
   }
+
+  async listMeetings(limit = 20) {
+    const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to list meetings (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Listing meetings timed out after 10 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl}.`);
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while listing recent meetings.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async getMeeting(meetingId) {
+    const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to get meeting (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Retrieving meeting details timed out after 10 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl}.`);
+        }
+        throw err;
+      }
+      throw new Error(`An unexpected error occurred while loading meeting '${meetingId}'.`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 describe('Frontend API Service & State Integration Tests', () => {
@@ -409,5 +489,123 @@ describe('Frontend API Service & State Integration Tests', () => {
     // Existing analysis object is completely unmodified
     assert.equal(existingAnalysis.summary, 'Preserved summary');
     assert.equal(existingAnalysis.clarification_required, true);
+  });
+
+  it('List Meetings: successfully queries /api/meetings with limit parameter', async () => {
+    const mockList = [
+      {
+        meeting_id: 'meeting_123',
+        title: 'Sprint Planning',
+        summary: 'Discussion on roadmap.',
+        created_at: '2026-11-03T18:00:00Z',
+        updated_at: '2026-11-03T18:00:00Z',
+        action_items_count: 3,
+        decisions_count: 2,
+        clarification_required: false,
+        unresolved_clarifications_count: 0,
+      },
+      {
+        meeting_id: 'meeting_456',
+        title: 'Backend Sync',
+        summary: 'Discussion on Firestore.',
+        created_at: '2026-11-03T19:00:00Z',
+        updated_at: '2026-11-03T19:10:00Z',
+        action_items_count: 1,
+        decisions_count: 1,
+        clarification_required: true,
+        unresolved_clarifications_count: 1,
+      },
+    ];
+
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\?limit=10$/);
+      assert.equal(options.method, 'GET');
+      return new Response(JSON.stringify(mockList), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const meetings = await client.listMeetings(10);
+    assert.equal(meetings.length, 2);
+    assert.equal(meetings[0].meeting_id, 'meeting_123');
+    assert.equal(meetings[0].action_items_count, 3);
+    assert.equal(meetings[1].clarification_required, true);
+  });
+
+  it('List Meetings: handles HTTP 503 when Firebase is unconfigured', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: 'Firebase Firestore persistence is not configured.' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.listMeetings(),
+      /Firebase Firestore persistence is not configured\./
+    );
+  });
+
+  it('Get Meeting: retrieves full meeting details and history by ID', async () => {
+    const mockDetail = {
+      meeting_id: 'meeting_789',
+      title: 'Architecture Review',
+      transcript: 'Full meeting transcript dialogue here.',
+      created_at: '2026-11-03T15:00:00Z',
+      updated_at: '2026-11-03T15:30:00Z',
+      analysis: {
+        summary: 'Architecture decisions finalized.',
+        discussion_points: ['Firestore vs MongoDB'],
+        decisions: ['Use Cloud Firestore'],
+        action_items: [
+          {
+            id: 'item_1',
+            task: 'Implement FirebaseService',
+            owner: 'Vishal',
+            deadline: 'Today',
+            status: 'completed',
+          },
+        ],
+        clarification_required: false,
+        clarifications: [],
+        meeting_id: 'meeting_789',
+      },
+      answers_history: [
+        {
+          clarification_id: 'clarif_1',
+          answer: 'Vishal will implement it today',
+          timestamp: '2026-11-03T15:30:00Z',
+        },
+      ],
+    };
+
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\/meeting_789$/);
+      assert.equal(options.method, 'GET');
+      return new Response(JSON.stringify(mockDetail), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const detail = await client.getMeeting('meeting_789');
+    assert.equal(detail.meeting_id, 'meeting_789');
+    assert.equal(detail.title, 'Architecture Review');
+    assert.equal(detail.transcript, 'Full meeting transcript dialogue here.');
+    assert.equal(detail.analysis.decisions[0], 'Use Cloud Firestore');
+    assert.equal(detail.answers_history.length, 1);
+  });
+
+  it('Get Meeting: throws descriptive error on 404 Not Found', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: "Meeting 'nonexistent_id' not found in Firestore." }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.getMeeting('nonexistent_id'),
+      /Meeting 'nonexistent_id' not found in Firestore\./
+    );
   });
 });

@@ -11,7 +11,9 @@ import {
   Copy, 
   Check, 
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  FileText,
+  Database
 } from 'lucide-react';
 import { 
   MeetingAnalysisResponse, 
@@ -22,6 +24,8 @@ import { ClarificationSection } from './ClarificationSection';
 interface AnalysisResultsProps {
   analysis: MeetingAnalysisResponse;
   meetingTitle?: string | null;
+  meetingId?: string | null;
+  transcript?: string | null;
   onClarify: (answers: ClarificationAnswer[]) => Promise<void>;
   isClarifying: boolean;
   clarificationError?: string | null;
@@ -32,6 +36,8 @@ interface AnalysisResultsProps {
 export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
   analysis,
   meetingTitle,
+  meetingId,
+  transcript,
   onClarify,
   isClarifying,
   clarificationError,
@@ -39,6 +45,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
   onResetMeeting,
 }) => {
   const [copiedSummary, setCopiedSummary] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
 
   const handleCopySummary = () => {
     navigator.clipboard.writeText(analysis.summary);
@@ -46,6 +53,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
     setTimeout(() => setCopiedSummary(false), 2000);
   };
 
+  const effectiveMeetingId = meetingId || analysis.meeting_id;
   const unresolvedClarifications = analysis.clarifications.filter((c) => !c.resolved);
   const totalActionItems = analysis.action_items.length;
   const unassignedOwners = analysis.action_items.filter((a) => !a.owner).length;
@@ -55,10 +63,16 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
       {/* Top action / summary bar */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/20">
               Analysis Results
             </span>
+            {effectiveMeetingId && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 flex items-center gap-1">
+                <Database className="w-2.5 h-2.5 text-emerald-500" />
+                <span>{effectiveMeetingId}</span>
+              </span>
+            )}
             {unresolvedClarifications.length > 0 ? (
               <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
@@ -76,7 +90,17 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
           </h2>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {transcript && (
+            <button
+              onClick={() => setShowTranscript((prev) => !prev)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors shadow-2xs"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{showTranscript ? 'Hide Transcript' : 'View Transcript'}</span>
+            </button>
+          )}
+
           <button
             onClick={onResetMeeting}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700/80 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors shadow-2xs"
@@ -87,6 +111,24 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Expanded Transcript View if toggled */}
+      {showTranscript && transcript && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs space-y-2">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+            <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-indigo-500" />
+              Original Meeting Transcript
+            </span>
+            <span className="text-[11px] font-mono text-slate-400">
+              {transcript.length} characters
+            </span>
+          </div>
+          <pre className="text-xs font-mono p-3 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
+            {transcript}
+          </pre>
+        </div>
+      )}
 
       {/* Grid: Summary & Discussion Points */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -35,6 +35,7 @@ def test_root_endpoint():
     assert "message" in data
     assert data["health"] == "/api/health"
     assert data["root_health"] == "/health"
+    assert data["meetings"] == "/api/meetings"
 
 def test_cors_headers():
     """

@@ -85,6 +85,11 @@ class MeetingAnalysisRequest(BaseModel):
         return v.strip()
 
 class MeetingAnalysisResponse(BaseModel):
+    meeting_id: Optional[str] = Field(
+        default=None,
+        description="Unique identifier for the persisted meeting document in Firestore",
+        json_schema_extra={"example": "m_1730650000_a1b2c3d4"}
+    )
     summary: str = Field(
         ...,
         description="Concise summary of the meeting",
@@ -132,6 +137,11 @@ class ClarificationAnswer(BaseModel):
     )
 
 class MeetingClarificationRequest(BaseModel):
+    meeting_id: Optional[str] = Field(
+        default=None,
+        description="Optional Firestore meeting ID to update the existing persisted record in-place",
+        json_schema_extra={"example": "m_1730650000_a1b2c3d4"}
+    )
     analysis: MeetingAnalysisResponse = Field(
         ...,
         description="The existing meeting analysis object to be updated with clarification answers"
@@ -141,3 +151,23 @@ class MeetingClarificationRequest(BaseModel):
         description="List of clarification answers submitted by the user",
         min_length=1
     )
+
+class MeetingListItem(BaseModel):
+    meeting_id: str = Field(..., description="Unique meeting ID in Firestore")
+    title: Optional[str] = Field(default=None, description="Optional meeting title")
+    summary: str = Field(..., description="Executive summary snippet or text")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp")
+    updated_at: str = Field(..., description="ISO 8601 last update timestamp")
+    action_items_count: int = Field(default=0, description="Total number of action items")
+    decisions_count: int = Field(default=0, description="Total number of confirmed decisions")
+    clarification_required: bool = Field(default=False, description="Whether clarification is still needed")
+    unresolved_clarifications_count: int = Field(default=0, description="Count of open ambiguities")
+
+class MeetingDetailResponse(BaseModel):
+    meeting_id: str = Field(..., description="Unique meeting ID in Firestore")
+    title: Optional[str] = Field(default=None, description="Meeting title or null")
+    transcript: str = Field(..., description="Full meeting transcript text")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp")
+    updated_at: str = Field(..., description="ISO 8601 last update timestamp")
+    analysis: MeetingAnalysisResponse = Field(..., description="Structured meeting analysis")
+    answers_history: List[dict] = Field(default_factory=list, description="Historical clarification answers audit log")

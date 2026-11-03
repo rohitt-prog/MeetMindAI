@@ -52,6 +52,10 @@ frontend/dist-ssr/
 .env.*
 !.env.example
 !**/.env.example
+*serviceAccountKey*.json
+*firebase*.json
+service-account*.json
+*.pem
 
 # IDE & Editors
 .vscode/

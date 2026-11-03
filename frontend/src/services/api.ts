@@ -3,6 +3,8 @@ import {
   MeetingAnalysisRequest,
   MeetingAnalysisResponse,
   MeetingClarificationRequest,
+  MeetingListItem,
+  MeetingDetailResponse,
 } from '../types/index';
 
 /**
@@ -188,6 +190,94 @@ class ApiService {
         throw err;
       }
       throw new Error('An unexpected error occurred while submitting clarification answers.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Retrieve recent saved meetings from Firestore.
+   * Calls GET /api/meetings?limit={limit}
+   */
+  async listMeetings(limit: number = 20): Promise<MeetingListItem[]> {
+    const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to list meetings (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as MeetingListItem[];
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Listing meetings timed out after 10 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl}.`);
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while listing recent meetings.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Retrieve details of a specific saved meeting by ID.
+   * Calls GET /api/meetings/{meeting_id}
+   */
+  async getMeeting(meetingId: string): Promise<MeetingDetailResponse> {
+    const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to get meeting (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as MeetingDetailResponse;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Retrieving meeting details timed out after 10 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(`Unable to connect to backend at ${this.baseUrl}.`);
+        }
+        throw err;
+      }
+      throw new Error(`An unexpected error occurred while loading meeting '${meetingId}'.`);
     } finally {
       clearTimeout(timeoutId);
     }

@@ -35,6 +35,7 @@ export interface MeetingAnalysisRequest {
 }
 
 export interface MeetingAnalysisResponse {
+  meeting_id?: string | null;
   summary: string;
   discussion_points: string[];
   decisions: string[];
@@ -50,14 +51,44 @@ export interface ClarificationAnswer {
 }
 
 export interface MeetingClarificationRequest {
+  meeting_id?: string | null;
   analysis: MeetingAnalysisResponse;
   answers: ClarificationAnswer[];
+}
+
+export interface MeetingListItem {
+  meeting_id: string;
+  title?: string | null;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+  action_items_count: number;
+  decisions_count: number;
+  clarification_required: boolean;
+  unresolved_clarifications_count: number;
+}
+
+export interface MeetingDetailResponse {
+  meeting_id: string;
+  title?: string | null;
+  transcript: string;
+  created_at: string;
+  updated_at: string;
+  analysis: MeetingAnalysisResponse;
+  answers_history?: Array<{
+    clarification_id: string;
+    answer: string;
+    timestamp: string;
+  }>;
 }
 
 export interface AnalysisState {
   isLoading: boolean;
   isClarifying: boolean;
   data: MeetingAnalysisResponse | null;
+  currentMeetingId: string | null;
+  currentTranscript: string;
+  currentTitle: string | null;
   error: string | null;
   clarificationError: string | null;
   lastAnalyzedAt: Date | null;
