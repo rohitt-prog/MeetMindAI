@@ -113,17 +113,16 @@ graph TD
 ### 5.1 The Anti-Hallucination & Ambiguity Architecture
 Large Language Models tend to make assumptions when presented with incomplete facts. For instance, if a transcript says *"We should fix the login bug soon"*, generic models often invent a fictitious deadline (e.g., *"Friday"*) or assign it to whoever spoke last.
 
-**MeetMind AI solves this using a two-pronged strategy:**
-1. **Explicit Null Constraints**:
-   - The system prompt enforces: `"If an action item has no clearly stated owner, set owner to null. Do not guess."`
-   - `"If no deadline is stated, set deadline to null."`
-2. **Ambiguity Taxonomy**:
-   - Ambiguities are systematically tagged into 5 categories:
-     - `ownership`: Missing or ambiguous assignee.
-     - `deadline`: Colloquial or missing due date.
-     - `task_scope`: Unclear deliverable specification.
-     - `decision_vs_suggestion`: Brainstorming proposals vs. binding commitments.
-     - `missing_context`: Lacking technical prerequisites.
+**MeetMind AI solves this using a four-way classification strategy:**
+1. **Needs Clarification**: Required task details are missing or unclear (e.g., "someone should send the report" or "finish by Friday" without indicating which Friday). A polite, direct clarification question is generated.
+2. **Open Follow-up / Deferred**: The transcript explicitly states that an assignment or decision is postponed to a future meeting or date (e.g., *"We need to inform marketing, but let's decide who will do that in the next meeting"*). The action item is marked `deferred`, and the item is captured as an open follow-up—**without prompting the user with unnecessary clarification questions**.
+3. **Resolved**: Clarification answers submitted by the user have resolved the ambiguity.
+4. **No Outstanding Issues**: No missing, ambiguous, or deferred details remain.
+
+**Extraction Guardrails:**
+- **Explicit Stated Values**: When a timeframe is mentioned vaguely (e.g., "by Friday"), MeetMind AI preserves the stated text (`deadline: "Friday"`) rather than replacing it with `None specified`, while flagging it for calendar clarification.
+- **Explicit Null Constraints**: If no owner or deadline was stated at all, uses `null`. Never guesses.
+- **Ambiguity Taxonomy**: Systematically tags items into `ownership`, `deadline`, `task_scope`, `decision_vs_suggestion`, and `missing_context`.
 
 ### 5.2 Atomic Firestore Updates vs. Document Duplication
 When resolving clarification questions, MeetMind AI does not overwrite the record with a new ID or create version sprawl. Instead:
@@ -174,13 +173,14 @@ ReportLab generates flowables in a single pass by default. However, executive re
 2. Similarly, for deadlines: *"Set deadline to null if no specific timeframe or due date is mentioned."*
 3. The Pydantic model defines `owner: Optional[str] = None` and `deadline: Optional[str] = None`. This ensures that missing attributes are represented as clean `null` primitives rather than placeholder strings.
 
-#### Q8: What is the Ambiguity Detection engine and how does it categorize ambiguities?
-**Answer:** MeetMind AI scans transcript statements for implicit or incomplete execution details across five distinct taxonomies:
-1. `ownership`: Task stated without an assigned owner (e.g., *"Someone must deploy this"*).
-2. `deadline`: Vague temporal terms (e.g., *"Let's finish this soon"*).
-3. `task_scope`: Unclear deliverables (e.g., *"Alex will take care of it"*).
-4. `decision_vs_suggestion`: Preliminary brainstorming ideas (e.g., *"We should consider shifting to AWS"*) which must not be cataloged as binding decisions.
-5. `missing_context`: Prerequisite questions requiring external input.
+#### Q8: What is the Ambiguity Detection engine and how does it differentiate between immediate clarifications and deferred follow-ups?
+**Answer:** MeetMind AI classifies meeting items into four distinct execution states:
+1. **Needs Clarification**: Actionable tasks missing essential details (e.g., *"Someone should send the report"*, or *"finish by Friday"* where the specific calendar Friday is unspecified). These generate interactive questions.
+2. **Open Follow-up / Deferred**: Items that participants explicitly agreed to handle in a future meeting (e.g., *"Let's decide who will inform marketing in the next meeting"*). These are tracked as open follow-ups without badgering the user with immediate clarification questions.
+3. **Resolved**: Questions that have been answered definitively by participants.
+4. **No Outstanding Issues**: Items where all deliverables, owners, and timelines are fully verified.
+
+In addition, ambiguities are categorized across five taxonomies: `ownership`, `deadline`, `task_scope`, `decision_vs_suggestion`, and `missing_context`.
 
 #### Q9: What happens when a user submits an ambiguous or unhelpful answer during clarification?
 **Answer:** When the user submits an answer like *"We still haven't decided"* or *"Not sure"*, Gemini re-evaluates the answer against the original ambiguity. If the answer does not provide concrete resolution, Gemini preserves `resolved: false` on that clarification item, and `clarification_required` remains `true`. The ambiguity is not cleared until definitive details are provided.
@@ -305,3 +305,4 @@ During your evaluation or lab demonstration, follow this step-by-step workflow:
      - Show the action items table with alternate row shading and badges.
      - Show the clarification audit log.
      - Show `"Page 1 of X"` running footers and running headers.
+

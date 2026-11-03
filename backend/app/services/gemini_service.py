@@ -73,14 +73,14 @@ class GeminiService:
             "1. summary: Provide a concise, coherent summary of what took place in the meeting.\n"
             "2. discussion_points: List the major topics and discussion threads covered.\n"
             "3. decisions: List only explicit, confirmed decisions agreed upon by participants.\n"
-            "   - CRITICAL: Distinguish between confirmed decisions versus preliminary suggestions, brainstorming ideas, or proposals (e.g., 'we should consider launching next month' is a suggestion, NOT a confirmed decision). Do NOT record unconfirmed suggestions as decisions.\n"
+            "   - CRITICAL: Distinguish between confirmed decisions versus preliminary suggestions, brainstorming ideas, or conditional proposals (e.g., 'we should consider launching next month' or 'launch date proposed for Nov 20th pending QA review'). If an item is conditional or awaiting review, do NOT record it as a confirmed decision unless the decision was explicitly to wait for review.\n"
             "4. action_items: Extract all concrete deliverables, tasks, and follow-ups. For each item:\n"
             "   - id: Assign a stable ID (e.g., 'action_1', 'action_2').\n"
-            "   - task: A clear, actionable description of the work. If the task statement itself is vague (e.g., 'Alex will handle it'), note the task but flag it for clarification.\n"
-            "   - owner: The name of the specific person assigned to the task. If no owner was explicitly assigned or if stated vaguely (e.g., 'someone should send the report'), use null. NEVER invent owners.\n"
-            "   - deadline: The specific due date or timeframe mentioned in the meeting. If no deadline was explicitly stated or if stated ambiguously (e.g., 'finish this by Friday' without indicating which Friday), use null. NEVER invent deadlines.\n"
-            "   - status: Set to 'pending' by default.\n"
-            "5. clarifications: A list of structured clarification items for meaningful ambiguities that affect execution:\n"
+            "   - task: A clear, actionable description of the work.\n"
+            "   - owner: The name of the specific person assigned to the task. If a person volunteers for a task later in the conversation (e.g., 'I will handle that'), use that confirmed owner. If no owner was assigned or if stated vaguely (e.g., 'someone should send the report'), use null. If the owner was explicitly deferred to a future meeting (e.g., 'let's decide who will do that in the next meeting'), use null.\n"
+            "   - deadline: The timeframe mentioned in the meeting. If a deadline was stated ambiguously (e.g. 'by Friday' without indicating which Friday), PRESERVE the stated timeframe (e.g., 'Friday') and create a clarification item for it. Do NOT set to null if a deadline was mentioned. Only use null if NO deadline was mentioned at all. NEVER invent calendar dates.\n"
+            "   - status: Set to 'deferred' (or 'deferred: owner to be decided in next meeting') if participants explicitly agreed to defer assignment or execution to the next meeting or future date. Otherwise set to 'pending'.\n"
+            "5. clarifications: A list of structured clarification items for meaningful ambiguities that require user input:\n"
             "   - id: Assign a stable ID (e.g., 'clarif_1', 'clarif_2').\n"
             "   - category: One of 'ownership', 'deadline', 'task_scope', 'decision_vs_suggestion', 'missing_context'.\n"
             "   - original_statement: The verbatim or excerpted quote from the transcript exhibiting ambiguity.\n"
@@ -88,9 +88,10 @@ class GeminiService:
             "   - question: A polite, direct clarification question seeking the missing detail.\n"
             "   - related_action_item_id: The ID of the related action item (e.g., 'action_1') if applicable, or null.\n"
             "   - resolved: Always false during initial extraction.\n"
-            "   * Note: Only flag ambiguity when it genuinely affects execution reliability. Do not ask unnecessary questions.\n"
-            "6. clarification_required: Set to true if any clarification item is present in 'clarifications'. Set to false if no ambiguities exist.\n"
-            "7. clarification_question: If clarification_required is true, set to the question of the first clarification item. If false, set to null.\n\n"
+            "   * CRITICAL DISTINCTION: Do NOT generate clarification questions for tasks or decisions that participants explicitly deferred to a future meeting (e.g., 'let's decide who will do that in the next meeting'). Those are open follow-ups, NOT immediate clarification questions.\n"
+            "6. open_follow_ups: A list of string descriptions for explicitly deferred tasks, follow-ups, or decisions that the transcript states will be decided or handled in a future meeting or date (e.g., 'Inform the marketing team (owner to be decided in next meeting)'). If none, return an empty list.\n"
+            "7. clarification_required: Set to true if any clarification item is present in 'clarifications'. Set to false if no immediate clarification items exist (even if open_follow_ups exist).\n"
+            "8. clarification_question: If clarification_required is true, set to the question of the first clarification item. If false, set to null.\n\n"
             f"{header}"
             "MEETING TRANSCRIPT:\n"
             "\"\"\"\n"
@@ -129,10 +130,11 @@ class GeminiService:
             "   - Mark that clarification item's 'resolved' field to true.\n"
             "3. When a user's answer is vague, says 'I don't know', 'not sure', 'TBD', 'still undecided', or does NOT provide sufficient information to resolve the ambiguity:\n"
             "   - Leave that clarification item's 'resolved' field as false.\n"
-            "   - Do NOT update action items or decisions with placeholder/unconfirmed values. Keep owners/deadlines as null.\n"
-            "4. NEVER overwrite, delete, or modify unrelated action items, decisions, or discussion points.\n"
+            "   - Do NOT update action items or decisions with placeholder/unconfirmed values. Keep owners/deadlines as null or original ambiguous value.\n"
+            "4. NEVER overwrite, delete, or modify unrelated action items, decisions, discussion points, or open_follow_ups.\n"
             "5. Preserve all existing action item IDs and clarification IDs exactly.\n"
-            "6. Overall Status:\n"
+            "6. Preserve all existing open_follow_ups entries exactly.\n"
+            "7. Overall Status:\n"
             "   - If any clarification remains unresolved (resolved == false), set 'clarification_required' to true, and set 'clarification_question' to the question of the first unresolved clarification.\n"
             "   - If ALL clarifications are now resolved (resolved == true), set 'clarification_required' to false, and set 'clarification_question' to null."
         )
@@ -238,16 +240,30 @@ class GeminiService:
     ) -> MeetingAnalysisResponse:
         """
         Guarantees stable action item IDs, preserves unrelated items,
-        and enforces consistent clarification status.
+        populates open_follow_ups from deferred items, and enforces
+        consistent clarification status.
         """
-        # Ensure every new action item has an ID
+        # 1. Initialize open_follow_ups if None
+        if analysis.open_follow_ups is None:
+            analysis.open_follow_ups = []
+        existing_followups = set(analysis.open_follow_ups)
+
+        # Ensure every new action item has an ID and detect explicitly deferred items
         for idx, item in enumerate(analysis.action_items, start=1):
             if not item.id:
                 item.id = f"action_{idx}"
 
-        # If original analysis is provided, safeguard against accidental LLM drops
+            status_lower = (item.status or "").lower()
+            if status_lower.startswith("deferred") or "next meeting" in status_lower:
+                reason = "owner to be decided in next meeting" if not item.owner else "deferred"
+                fu_text = f"{item.task} ({reason})"
+                if fu_text not in existing_followups and not any(item.task.lower() in ef.lower() for ef in existing_followups):
+                    analysis.open_follow_ups.append(fu_text)
+                    existing_followups.add(fu_text)
+
+        # 2. If original analysis is provided, safeguard against accidental LLM drops
         if original_analysis:
-            # 1. Merge and preserve clarifications
+            # Merge and preserve clarifications
             updated_clarifs_by_id = {c.id: c for c in analysis.clarifications}
             merged_clarifications = []
             seen_ids = set()
@@ -269,7 +285,7 @@ class GeminiService:
 
             analysis.clarifications = merged_clarifications
 
-            # 2. Preserve unrelated action items that may have been omitted by LLM
+            # Preserve unrelated action items that may have been omitted by LLM
             existing_action_ids = {a.id for a in analysis.action_items if a.id}
             existing_action_tasks = {a.task.strip().lower() for a in analysis.action_items}
             for orig_item in original_analysis.action_items:
@@ -278,25 +294,42 @@ class GeminiService:
                     if orig_item.task.strip().lower() not in existing_action_tasks:
                         analysis.action_items.append(orig_item)
 
-            # 3. Preserve discussion points if LLM response truncated them
+            # Preserve discussion points if LLM response truncated them
             existing_dp_lower = {dp.strip().lower() for dp in analysis.discussion_points}
             for orig_dp in original_analysis.discussion_points:
                 if orig_dp.strip().lower() not in existing_dp_lower:
                     analysis.discussion_points.append(orig_dp)
 
-        # Evaluate unresolved clarifications
+            # Preserve open_follow_ups from original_analysis
+            if original_analysis.open_follow_ups:
+                for orig_fu in original_analysis.open_follow_ups:
+                    if orig_fu not in existing_followups:
+                        analysis.open_follow_ups.append(orig_fu)
+                        existing_followups.add(orig_fu)
+
+        # 3. Ensure deferred tasks don't retain redundant immediate clarification questions
+        deferred_task_ids = {
+            item.id for item in analysis.action_items
+            if item.id and (item.status or "").lower().startswith("deferred")
+        }
+        if deferred_task_ids:
+            # Filter out clarifications asking who owns a task when owner is explicitly deferred
+            filtered_clarifications = []
+            for c in analysis.clarifications:
+                if c.related_action_item_id in deferred_task_ids and c.category == "ownership":
+                    continue
+                filtered_clarifications.append(c)
+            analysis.clarifications = filtered_clarifications
+
+        # 4. Evaluate unresolved clarifications
         unresolved = [c for c in analysis.clarifications if not c.resolved]
         if unresolved:
             analysis.clarification_required = True
             if not analysis.clarification_question:
                 analysis.clarification_question = unresolved[0].question
         else:
-            if not analysis.clarifications and analysis.clarification_required:
-                # Retain backward compatibility if clarifications list is empty but flag is set
-                pass
-            else:
-                analysis.clarification_required = False
-                analysis.clarification_question = None
+            analysis.clarification_required = False
+            analysis.clarification_question = None
 
         return analysis
 

@@ -807,4 +807,94 @@ describe('Frontend API Service & State Integration Tests', () => {
       /Meeting 'm_missing' not found in Firestore\./
     );
   });
+
+  it('Meeting Analysis: correctly processes analysis with open follow-ups and deferred tasks', async () => {
+    const mockAnalysisResponse = {
+      meeting_id: 'm_deferred_123',
+      summary: 'Product launch sync with deferred marketing owner.',
+      discussion_points: ['Marketing coordination'],
+      decisions: [],
+      action_items: [
+        {
+          id: 'action_1',
+          task: 'Inform the marketing team',
+          owner: null,
+          deadline: null,
+          status: 'deferred: next meeting',
+        },
+      ],
+      clarification_required: false,
+      clarification_question: null,
+      clarifications: [],
+      open_follow_ups: [
+        'Inform the marketing team (owner to be decided in next meeting)',
+      ],
+    };
+
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\/analyze$/);
+      assert.equal(options.method, 'POST');
+      return new Response(JSON.stringify(mockAnalysisResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const result = await client.analyzeMeeting({
+      title: 'Launch Sync',
+      transcript: 'Maya: We need to inform marketing, but let us decide who will do that in the next meeting.',
+    });
+
+    assert.equal(result.meeting_id, 'm_deferred_123');
+    assert.equal(result.clarification_required, false);
+    assert.equal(result.action_items[0].owner, null);
+    assert.match(result.action_items[0].status, /deferred/);
+    assert.equal(result.open_follow_ups.length, 1);
+    assert.match(result.open_follow_ups[0], /marketing/);
+  });
+
+  it('PDF Export: passes analysis containing open follow-ups cleanly', async () => {
+    const mockPdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]);
+    let capturedBody = null;
+
+    globalThis.fetch = async (url, options) => {
+      assert.match(url, /\/api\/meetings\/export\/pdf$/);
+      assert.equal(options.method, 'POST');
+      capturedBody = JSON.parse(options.body);
+
+      return new Response(mockPdfBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'attachment; filename="meetmind_launch_sync.pdf"',
+        },
+      });
+    };
+
+    const result = await client.exportMeetingPdf({
+      title: 'Launch Sync',
+      analysis: {
+        summary: 'Sync summary',
+        discussion_points: [],
+        decisions: [],
+        action_items: [
+          {
+            id: 'action_1',
+            task: 'Inform marketing team',
+            owner: null,
+            deadline: null,
+            status: 'deferred: next meeting',
+          },
+        ],
+        clarification_required: false,
+        clarifications: [],
+        open_follow_ups: ['Inform marketing team (next meeting)'],
+      },
+    });
+
+    assert.equal(result.filename, 'meetmind_launch_sync.pdf');
+    assert.ok(result.blob);
+    assert.ok(capturedBody.analysis.open_follow_ups);
+    assert.equal(capturedBody.analysis.open_follow_ups.length, 1);
+  });
 });

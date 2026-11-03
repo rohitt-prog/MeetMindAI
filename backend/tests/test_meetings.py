@@ -1077,3 +1077,438 @@ def test_clarify_preserves_unrelated_action_items_and_clarifications():
     finally:
         gemini_service._client = original_client
         gemini_service._api_key = original_key
+
+
+# =============================================================================
+# REGRESSION TEST SUITE: AMBIGUITY CLASSIFICATION & PDF REPORTING (PHASE 8 BUG FIX)
+# =============================================================================
+
+
+def test_case_a_explicitly_deferred_owner():
+    """
+    Case A — Explicitly deferred owner:
+    The marketing task owner is deferred to the next meeting.
+    Expected:
+      - Open follow-up captured in open_follow_ups.
+      - Action item has owner=None, status starts with 'deferred'.
+      - No immediate clarification question in clarifications.
+      - Not reported as zero outstanding items in PDF export.
+    """
+    deferred_insights = {
+        "summary": "Product launch planning sync discussing tasks and marketing coordination.",
+        "discussion_points": ["Marketing coordination discussion"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Inform the marketing team",
+                "owner": None,
+                "deadline": None,
+                "status": "deferred: owner to be decided in next meeting",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [],
+        "open_follow_ups": [
+            "Inform the marketing team (owner to be decided in next meeting)"
+        ],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(deferred_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/analyze",
+            json={
+                "title": "Product Launch Planning",
+                "transcript": "Maya: We also need to inform the marketing team, but let's decide who will do that in the next meeting.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # 1. Action item owner is None/unassigned, but status is deferred
+        assert len(data["action_items"]) == 1
+        item = data["action_items"][0]
+        assert item["owner"] is None
+        assert "deferred" in item["status"].lower()
+
+        # 2. Open follow-up exists
+        assert len(data["open_follow_ups"]) >= 1
+        assert any("marketing" in fu.lower() for fu in data["open_follow_ups"])
+
+        # 3. No immediate clarification required
+        assert data["clarification_required"] is False
+        assert len(data["clarifications"]) == 0
+
+        # 4. In PDF export: status shows 0 Clarifications Required | 1 Open Follow-up
+        pdf_res = client.post(
+            "/api/meetings/export/pdf",
+            json={
+                "title": "Product Launch Planning",
+                "transcript": "Maya: We also need to inform the marketing team, but let's decide who will do that in the next meeting.",
+                "analysis": data,
+            },
+        )
+        assert pdf_res.status_code == 200
+        pdf_bytes = pdf_res.content
+        assert pdf_bytes.startswith(b"%PDF-")
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_case_b_vague_deadline_preservation():
+    """
+    Case B — Vague deadline:
+    “Prepare the report by Friday.”
+    Expected:
+      - Preserve original deadline wording ('Friday'), do NOT silently replace with null.
+      - Flag the date ambiguity in clarifications.
+      - In PDF: display 'Friday' and '(Clarification required)', NOT 'None specified'.
+    """
+    vague_deadline_insights = {
+        "summary": "David volunteered to prepare the regression test report by Friday.",
+        "discussion_points": ["Regression testing preparation"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Prepare the regression test report",
+                "owner": "David",
+                "deadline": "Friday",  # Stated deadline PRESERVED!
+                "status": "pending",
+            }
+        ],
+        "clarification_required": True,
+        "clarification_question": "Which specific Friday is intended for the regression test report?",
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "deadline",
+                "original_statement": "David: I'll prepare the regression test report by Friday.",
+                "explanation": "The specific calendar date and time for Friday is unspecified.",
+                "question": "Which specific Friday is intended for the regression test report?",
+                "related_action_item_id": "action_1",
+                "resolved": False,
+            }
+        ],
+        "open_follow_ups": [],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(vague_deadline_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/analyze",
+            json={
+                "title": "QA Sync",
+                "transcript": "David: I'll prepare the regression test report by Friday.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # 1. Deadline text preserved
+        assert data["action_items"][0]["deadline"] == "Friday"
+        assert data["action_items"][0]["owner"] == "David"
+
+        # 2. Clarification flagged
+        assert data["clarification_required"] is True
+        assert len(data["clarifications"]) == 1
+        assert data["clarifications"][0]["category"] == "deadline"
+
+        # 3. Export PDF
+        pdf_res = client.post(
+            "/api/meetings/export/pdf",
+            json={"title": "QA Sync", "analysis": data},
+        )
+        assert pdf_res.status_code == 200
+        assert pdf_res.content.startswith(b"%PDF-")
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_case_c_clarified_deadline_updates_and_persists():
+    """
+    Case C — Clarified deadline:
+    User specifies the exact Friday.
+    Expected:
+      - Clarification resolves and updated deadline persists.
+    """
+    initial_analysis = {
+        "summary": "David preparing regression report.",
+        "discussion_points": ["QA timeline"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Prepare the regression test report",
+                "owner": "David",
+                "deadline": "Friday",
+                "status": "pending",
+            }
+        ],
+        "clarification_required": True,
+        "clarification_question": "Which specific Friday is intended for the regression test report?",
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "deadline",
+                "original_statement": "I'll prepare the regression test report by Friday.",
+                "explanation": "Unspecified calendar date.",
+                "question": "Which specific Friday is intended for the regression test report?",
+                "related_action_item_id": "action_1",
+                "resolved": False,
+            }
+        ],
+        "open_follow_ups": [],
+    }
+
+    updated_insights = {
+        "summary": "David preparing regression report by November 14th.",
+        "discussion_points": ["QA timeline"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Prepare the regression test report",
+                "owner": "David",
+                "deadline": "Friday, November 14th at 5 PM",  # Updated confirmed deadline
+                "status": "pending",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "deadline",
+                "original_statement": "I'll prepare the regression test report by Friday.",
+                "explanation": "Unspecified calendar date.",
+                "question": "Which specific Friday is intended for the regression test report?",
+                "related_action_item_id": "action_1",
+                "resolved": True,  # Now resolved!
+            }
+        ],
+        "open_follow_ups": [],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(updated_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/clarify",
+            json={
+                "analysis": initial_analysis,
+                "answers": [
+                    {
+                        "clarification_id": "clarif_1",
+                        "answer": "Friday, November 14th at 5 PM",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["action_items"][0]["deadline"] == "Friday, November 14th at 5 PM"
+        assert data["clarifications"][0]["resolved"] is True
+        assert data["clarification_required"] is False
+        assert data["clarification_question"] is None
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_case_d_explicitly_assigned_owner_from_later_volunteer():
+    """
+    Case D — Explicitly assigned owner:
+    A person volunteers for a task later in the transcript.
+    Expected: Use the confirmed owner, not 'Unassigned' or None.
+    """
+    volunteer_insights = {
+        "summary": "Team reviewed documentation needs and Alex volunteered to handle it.",
+        "discussion_points": ["Documentation update"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Update the documentation",
+                "owner": "Alex",  # Explicitly assigned from volunteer!
+                "deadline": "Thursday",
+                "status": "pending",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [],
+        "open_follow_ups": [],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(volunteer_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/analyze",
+            json={
+                "title": "Doc Sync",
+                "transcript": "Sarah: Someone should update the documentation.\nAlex: I will update the documentation by Thursday.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["action_items"][0]["owner"] == "Alex"
+        assert data["action_items"][0]["owner"] is not None
+        assert data["clarification_required"] is False
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_case_e_proposal_versus_decision_with_qa_dependency():
+    """
+    Case E — Proposal versus decision:
+    A launch date is proposed but explicitly awaits QA review.
+    Expected:
+      - Proposal remains unconfirmed; NOT listed as a confirmed decision.
+      - Preserved as a discussion point or open follow-up.
+    """
+    proposal_insights = {
+        "summary": "Team discussed November 20 launch proposal pending QA sign-off.",
+        "discussion_points": ["Proposed launch date of November 20th awaiting final QA review"],
+        "decisions": [],  # NOT a confirmed decision!
+        "action_items": [],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [],
+        "open_follow_ups": ["Launch date decision pending QA sign-off"],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(proposal_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/analyze",
+            json={
+                "title": "Launch Readiness Sync",
+                "transcript": "Maya: We proposed launching on November 20th, but the launch date is unconfirmed pending final QA review.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["decisions"]) == 0
+        assert len(data["open_follow_ups"]) >= 1
+        assert "qa" in data["open_follow_ups"][0].lower()
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+
+
+def test_case_f_no_ambiguities_or_follow_ups():
+    """
+    Case F — No ambiguities or follow-ups:
+    Expected: Reports 'No Outstanding Issues' only when genuinely appropriate.
+    """
+    clean_insights = {
+        "summary": "Team aligned on payment integration and documentation.",
+        "discussion_points": ["Stripe integration", "Customer FAQ review"],
+        "decisions": ["Deploy Stripe integration to staging on Tuesday"],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Finalize Stripe integration",
+                "owner": "Arjun",
+                "deadline": "Tuesday 5 PM",
+                "status": "pending",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [],
+        "open_follow_ups": [],
+    }
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(clean_insights)
+    mock_client.models.generate_content.return_value = mock_response
+
+    original_client = gemini_service._client
+    original_key = gemini_service._api_key
+    gemini_service._api_key = "test_valid_api_key"
+    gemini_service.set_client(mock_client)
+
+    try:
+        response = client.post(
+            "/api/meetings/analyze",
+            json={
+                "title": "Clean Sync",
+                "transcript": "Arjun: I will finalize Stripe integration by Tuesday 5 PM.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["clarification_required"] is False
+        assert len(data["clarifications"]) == 0
+        assert len(data["open_follow_ups"]) == 0
+
+        # Export PDF and verify it succeeds
+        pdf_res = client.post(
+            "/api/meetings/export/pdf",
+            json={"title": "Clean Sync", "analysis": data},
+        )
+        assert pdf_res.status_code == 200
+        assert pdf_res.content.startswith(b"%PDF-")
+
+    finally:
+        gemini_service._client = original_client
+        gemini_service._api_key = original_key
+

@@ -43,6 +43,7 @@ export interface MeetingAnalysisResponse {
   clarification_required: boolean;
   clarification_question?: string | null;
   clarifications: ClarificationItem[];
+  open_follow_ups?: string[];
 }
 
 export interface ClarificationAnswer {
@@ -66,6 +67,7 @@ export interface MeetingListItem {
   decisions_count: number;
   clarification_required: boolean;
   unresolved_clarifications_count: number;
+  open_follow_ups_count?: number;
 }
 
 export interface MeetingDetailResponse {

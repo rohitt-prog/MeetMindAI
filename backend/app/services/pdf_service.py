@@ -331,11 +331,31 @@ class PdfService:
         doc_created = created_at if created_at else now_utc
         effective_meeting_id = meeting_id or analysis.meeting_id or "Session Workspace (Unsaved)"
 
-        unresolved_count = sum(1 for c in analysis.clarifications if not c.resolved)
-        if unresolved_count > 0:
-            status_text = f"<font color='#B45309'><b>{unresolved_count} Action(s) Required</b></font>"
+        # Collect open follow-ups from analysis.open_follow_ups plus deferred action items
+        open_follow_ups = list(analysis.open_follow_ups) if analysis.open_follow_ups else []
+        for a in analysis.action_items:
+            if (a.status or "").lower().startswith("deferred"):
+                item_desc = f"{a.task} (deferred to future meeting)"
+                if not any(a.task.lower() in fu.lower() for fu in open_follow_ups):
+                    open_follow_ups.append(item_desc)
+
+        unresolved_clarifs = [c for c in analysis.clarifications if not c.resolved]
+        resolved_clarifs = [c for c in analysis.clarifications if c.resolved]
+
+        unresolved_count = len(unresolved_clarifs)
+        follow_up_count = len(open_follow_ups)
+
+        if unresolved_count > 0 and follow_up_count > 0:
+            status_text = f"<font color='#B45309'><b>{unresolved_count} Clarification(s) Required | {follow_up_count} Open Follow-up(s)</b></font>"
+        elif unresolved_count > 0:
+            status_text = f"<font color='#B45309'><b>{unresolved_count} Clarification(s) Required</b></font>"
+        elif follow_up_count > 0:
+            status_text = f"<font color='#4F46E5'><b>0 Clarifications Required | {follow_up_count} Open Follow-up(s)</b></font>"
         else:
-            status_text = "<font color='#047857'><b>Verified & Clear (0 Ambiguities)</b></font>"
+            if resolved_clarifs:
+                status_text = "<font color='#047857'><b>Resolved (No Outstanding Issues)</b></font>"
+            else:
+                status_text = "<font color='#047857'><b>Verified & Clear (No Outstanding Issues)</b></font>"
 
         meta_data = [
             [
@@ -430,23 +450,51 @@ class PdfService:
 
             for idx, item in enumerate(analysis.action_items):
                 task_p = Paragraph(xml_escape(item.task.strip()), styles["TableCell"])
-                
+                is_deferred = (item.status or "").lower().startswith("deferred")
+                has_owner_clarif = any(
+                    c.related_action_item_id == item.id and c.category == "ownership" and not c.resolved
+                    for c in analysis.clarifications
+                )
+                has_deadline_clarif = any(
+                    c.related_action_item_id == item.id and c.category == "deadline" and not c.resolved
+                    for c in analysis.clarifications
+                )
+                has_any_clarif = any(
+                    c.related_action_item_id == item.id and not c.resolved
+                    for c in analysis.clarifications
+                )
+
                 # Owner format
                 if item.owner and item.owner.strip():
                     owner_p = Paragraph(f"<b>{xml_escape(item.owner.strip())}</b>", styles["TableCellOwner"])
+                elif is_deferred:
+                    owner_p = Paragraph("<font color='#4F46E5'>Deferred to next meeting</font>", styles["TableCell"])
+                elif has_owner_clarif:
+                    owner_p = Paragraph("<font color='#B45309'><b>Unassigned</b><br/><font size='7.5'><i>(Clarification required)</i></font></font>", styles["TableCell"])
                 else:
                     owner_p = Paragraph("<font color='#D97706'>Unassigned</font>", styles["TableCellMuted"])
 
                 # Deadline format
                 if item.deadline and item.deadline.strip():
-                    deadline_p = Paragraph(xml_escape(item.deadline.strip()), styles["TableCell"])
+                    if has_deadline_clarif:
+                        deadline_p = Paragraph(f"<b>{xml_escape(item.deadline.strip())}</b><br/><font color='#B45309' size='7.5'><i>(Clarification required)</i></font>", styles["TableCell"])
+                    else:
+                        deadline_p = Paragraph(xml_escape(item.deadline.strip()), styles["TableCell"])
+                elif is_deferred:
+                    deadline_p = Paragraph("<font color='#4F46E5'>Deferred</font>", styles["TableCellMuted"])
+                elif has_deadline_clarif:
+                    deadline_p = Paragraph("<font color='#B45309'><b>Unspecified</b><br/><font size='7.5'><i>(Clarification required)</i></font></font>", styles["TableCell"])
                 else:
                     deadline_p = Paragraph("<font color='#94A3B8'>None specified</font>", styles["TableCellMuted"])
 
                 # Status format
                 status_raw = (item.status or "pending").strip().replace("_", " ").title()
-                if status_raw.lower() in ("completed", "done", "resolved"):
+                if is_deferred:
+                    status_p = Paragraph("<font color='#4F46E5'><b>Deferred</b></font>", styles["TableCell"])
+                elif status_raw.lower() in ("completed", "done", "resolved"):
                     status_p = Paragraph(f"<font color='#059669'><b>{xml_escape(status_raw)}</b></font>", styles["TableCell"])
+                elif has_any_clarif:
+                    status_p = Paragraph("<font color='#B45309'><b>Needs Clarification</b></font>", styles["TableCell"])
                 elif status_raw.lower() in ("in progress", "in_progress"):
                     status_p = Paragraph(f"<font color='#2563EB'><b>{xml_escape(status_raw)}</b></font>", styles["TableCell"])
                 else:
@@ -484,10 +532,11 @@ class PdfService:
         # =========================================================================
         story.append(Paragraph("5. Ambiguity Detection & Clarification Audit", styles["SectionHeading"]))
 
-        if analysis.clarifications:
-            clarif_table_data = []
-            
-            # Map answers_history for quick lookup
+        has_clarifications = bool(analysis.clarifications)
+        has_follow_ups = bool(open_follow_ups)
+
+        # 5.1 Render Clarification Cards (if any)
+        if has_clarifications:
             answers_map = {}
             if answers_history:
                 for ans in answers_history:
@@ -497,29 +546,24 @@ class PdfService:
 
             for c_idx, c_item in enumerate(analysis.clarifications):
                 cat_badge = c_item.category.upper().replace("_", " ")
-                status_label = "RESOLVED" if c_item.resolved else "UNRESOLVED / PENDING"
+                status_label = "RESOLVED" if c_item.resolved else "CLARIFICATION REQUIRED"
                 status_color = "#047857" if c_item.resolved else "#B45309"
                 bg_box_color = colors.HexColor("#F0FDF4") if c_item.resolved else colors.HexColor("#FFFBEB")
                 border_color = colors.HexColor("#BBF7D0") if c_item.resolved else colors.HexColor("#FDE68A")
 
                 lines = []
-                # Badge row
                 badge_html = f"<b>[{cat_badge}]</b>  &bull;  <font color='{status_color}'><b>{status_label}</b></font>"
                 lines.append(Paragraph(badge_html, styles["MetaLabel"]))
                 lines.append(Spacer(1, 2))
 
-                # Question
                 lines.append(Paragraph(f"<b>Clarification Question:</b> {xml_escape(c_item.question)}", styles["ClarificationQuestion"]))
                 lines.append(Spacer(1, 2))
 
-                # Original statement context
                 lines.append(Paragraph(f"<b>Transcript Context:</b> &ldquo;{xml_escape(c_item.original_statement)}&rdquo;", styles["ClarificationStatement"]))
 
-                # Explanation
                 if c_item.explanation:
                     lines.append(Paragraph(f"<b>Rationale:</b> {xml_escape(c_item.explanation)}", styles["ClarificationStatement"]))
 
-                # Provided answer (if resolved or exists in history)
                 answer_val = answers_map.get(c_item.id)
                 if answer_val:
                     lines.append(Spacer(1, 2))
@@ -537,22 +581,75 @@ class PdfService:
 
                 story.append(card_table)
                 story.append(Spacer(1, 6))
-        else:
-            clean_banner = Paragraph(
-                "<font color='#047857'><b>&check; Zero Ambiguities Detected</b></font> — "
-                "All deliverables, timelines, and decisions were articulated with unambiguous context.",
-                styles["ExecutiveSummary"]
+
+        # 5.2 Render Open Follow-ups / Deferred Items (if any)
+        if has_follow_ups:
+            for fu_idx, fu_item in enumerate(open_follow_ups):
+                lines = [
+                    Paragraph("<b>[OPEN FOLLOW-UP / DEFERRED]</b>  &bull;  <font color='#4F46E5'><b>PENDING FUTURE MEETING</b></font>", styles["MetaLabel"]),
+                    Spacer(1, 2),
+                    Paragraph(f"<b>Item / Deliverable:</b> {xml_escape(fu_item)}", styles["ClarificationQuestion"]),
+                    Spacer(1, 2),
+                    Paragraph("<b>Clarification Required Now:</b> <font color='#4F46E5'>No</font> &mdash; Explicitly deferred in transcript to be determined in the next meeting or future discussion.", styles["ClarificationStatement"]),
+                ]
+
+                card_table = Table([[lines]], colWidths=[532])
+                card_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEF2FF")),
+                    ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#C7D2FE")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ]))
+
+                story.append(card_table)
+                story.append(Spacer(1, 6))
+
+        # 5.3 Summary Banner
+        if unresolved_count > 0 and follow_up_count > 0:
+            banner_html = (
+                f"<font color='#B45309'><b>&bull; Clarification Required &amp; Open Follow-ups:</b></font> "
+                f"<b>{unresolved_count}</b> question(s) require participant response. "
+                f"In addition, <b>{follow_up_count}</b> item(s) are recorded as open follow-ups deferred to a future meeting."
             )
-            banner_table = Table([[clean_banner]], colWidths=[532])
-            banner_table.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0FDF4")),
-                ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#BBF7D0")),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-            ]))
-            story.append(banner_table)
+            bg_banner, border_banner = colors.HexColor("#FFFBEB"), colors.HexColor("#FDE68A")
+        elif unresolved_count > 0:
+            banner_html = (
+                f"<font color='#B45309'><b>&bull; Clarification Required:</b></font> "
+                f"<b>{unresolved_count}</b> ambiguity question(s) require participant clarification."
+            )
+            bg_banner, border_banner = colors.HexColor("#FFFBEB"), colors.HexColor("#FDE68A")
+        elif follow_up_count > 0:
+            banner_html = (
+                f"<font color='#4F46E5'><b>&bull; 0 Clarifications Required:</b></font> "
+                f"All active deliverables have clear assignments; <b>{follow_up_count}</b> open follow-up(s) deferred to future discussion."
+            )
+            bg_banner, border_banner = colors.HexColor("#EEF2FF"), colors.HexColor("#C7D2FE")
+        else:
+            if resolved_clarifs:
+                banner_html = (
+                    "<font color='#047857'><b>&check; Resolved (No Outstanding Issues)</b></font> &mdash; "
+                    "All ambiguities were successfully addressed through user clarification."
+                )
+            else:
+                banner_html = (
+                    "<font color='#047857'><b>&check; No Outstanding Issues</b></font> &mdash; "
+                    "All deliverables, timelines, and decisions were articulated with unambiguous context."
+                )
+            bg_banner, border_banner = colors.HexColor("#F0FDF4"), colors.HexColor("#BBF7D0")
+
+        banner_p = Paragraph(banner_html, styles["ExecutiveSummary"])
+        banner_table = Table([[banner_p]], colWidths=[532])
+        banner_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), bg_banner),
+            ("BOX", (0, 0), (-1, -1), 0.75, border_banner),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        story.append(banner_table)
 
         story.append(Spacer(1, 10))
 

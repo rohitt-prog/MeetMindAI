@@ -123,6 +123,11 @@ class MeetingAnalysisResponse(BaseModel):
         default_factory=list,
         description="Structured list of ambiguity clarifications identified in the meeting transcript"
     )
+    open_follow_ups: List[str] = Field(
+        default_factory=list,
+        description="List of explicitly deferred tasks, follow-ups, or decisions postponed to a future meeting or date",
+        json_schema_extra={"example": ["Inform the marketing team (owner to be decided in next meeting)"]}
+    )
 
 class ClarificationAnswer(BaseModel):
     clarification_id: str = Field(
@@ -162,6 +167,7 @@ class MeetingListItem(BaseModel):
     decisions_count: int = Field(default=0, description="Total number of confirmed decisions")
     clarification_required: bool = Field(default=False, description="Whether clarification is still needed")
     unresolved_clarifications_count: int = Field(default=0, description="Count of open ambiguities")
+    open_follow_ups_count: int = Field(default=0, description="Count of explicitly deferred follow-up items")
 
 class MeetingDetailResponse(BaseModel):
     meeting_id: str = Field(..., description="Unique meeting ID in Firestore")

@@ -50,7 +50,7 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 - **Styling**: Tailwind CSS (Modern productivity UI with light/dark theme toggle, subtle borders, indigo accent)
 - **Icons**: Lucide React
 - **HTTP Client**: Centralized Fetch API client (`apiService`) with robust error classification and binary blob download handlers
-- **Testing**: Native Node.js test runner (`node:test`, 16 automated unit tests)
+- **Testing**: Native Node.js test runner (`node:test`, 18 automated unit tests)
 
 ### Backend (Implemented in Phase 1, 2, 3, 6 & 7)
 - **Framework**: Python 3.11+ with FastAPI
@@ -60,7 +60,7 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 - **Database & Persistence**: Firebase Cloud Firestore via official `firebase-admin` Python SDK
 - **PDF Compilation**: ReportLab (`reportlab>=4.2.0`) with custom two-pass canvas (`NumberedCanvas`) and auto-wrapping tables
 - **Validation & Settings**: Pydantic v2 & `pydantic-settings`
-- **Testing**: Pytest & HTTPX TestClient with mocked Gemini, Firestore, and PDF compiler calls (38 automated tests)
+- **Testing**: Pytest & HTTPX TestClient with mocked Gemini, Firestore, and PDF compiler calls (47 automated tests)
 - **Middleware**: Fast CORS middleware configured for Vite development servers
 
 ---
@@ -86,7 +86,7 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 | **Firebase Firestore Persistence** | Completed | Cloud Firestore integration via `firebase-admin`, document storage, list recent meetings, detail retrieval, and in-place updates. |
 | **Meeting History & Reopen UI** | Completed | History tab and sidebar meeting list, one-click meeting reopening, transcript viewer toggle, and "New Meeting" reset. |
 | **PDF Meeting Report Export** | Completed | Publication-grade server-side PDF generator using ReportLab with multi-page handling, safe filename sanitization, and browser download actions. |
-| **Final Validation, Docs & Viva Prep** | **Completed (Phase 8)** | Full test coverage (38 backend, 16 frontend), zero-credential test suite, clean build, and 25-question technical viva preparation guide. |
+| **Final Validation, Docs & Viva Prep** | **Completed (Phase 8)** | Full test coverage (47 backend, 18 frontend), zero-credential test suite, clean build, 4-way ambiguity classification, and 25-question technical viva preparation guide. |
 
 ---
 
@@ -543,8 +543,10 @@ The frontend dashboard will be available at `http://localhost:5173`.
   - Frontend "Export PDF" button in workspace results header and quick-export icons on history cards
   - 38 backend automated tests and 16 frontend unit tests passing
 - [x] **Phase 8: Final Validation, Documentation & Viva Preparation**
-  - Full backend test suite passing (38/38 tests across health, Gemini, clarifications, Firestore, and PDF export)
-  - Full frontend test suite passing (16/16 unit tests via `node:test`, zero TypeScript errors, clean Vite production build)
+  - Full backend test suite passing (47/47 tests across health, Gemini, clarifications, Firestore, PDF export, and ambiguity regression cases A–F)
+  - Full frontend test suite passing (18/18 unit tests via `node:test`, zero TypeScript errors, clean Vite production build)
+  - 4-Way Ambiguity Classification: cleanly distinguishes Needs Clarification, Open Follow-ups / Deferred, Resolved, and No Outstanding Issues
+  - Vague deadline preservation: verbatim deadline wording (e.g., 'Friday') preserved rather than replaced with `None specified`
   - Rigorous security and configuration audit: verified zero credentials or keys in Git; robust `.gitignore` enforcement
   - Version bump to production standard `v1.0.0` across backend configuration and UI navigation badge
   - Production-ready Viva Preparation Guide ([docs/VIVA_PREPARATION.md](docs/VIVA_PREPARATION.md)) including 1-minute elevator pitch, architectural breakdown, anti-hallucination analysis, testing philosophy, 25 technical viva Q&As, and step-by-step live demo script

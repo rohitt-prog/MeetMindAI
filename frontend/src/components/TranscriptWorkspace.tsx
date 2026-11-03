@@ -47,6 +47,15 @@ Elena: We should consider launching the enterprise tier next month if beta feedb
 Marcus: Let's also make sure the privacy policy is updated. Someone needs to review GDPR compliance before launch.
 Elena: I'll coordinate with legal. Let's finish the compliance checklist by Friday.`,
     },
+    {
+      label: 'Product Launch (Deferred & Follow-ups)',
+      title: 'Product Launch Planning Sync',
+      text: `Arjun: I will finalize the Stripe payment-flow integration by Tuesday 5 PM.
+Neha: I'll prepare the customer FAQ documentation and review the launch checklist by Thursday.
+David: I'll prepare the regression test report by Friday.
+Maya: We proposed launching on November 20th, but the launch date is unconfirmed pending final QA review.
+Maya: We also need to inform the marketing team, but let's decide who will do that in the next meeting.`,
+    },
   ];
 
   const wordCount = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;

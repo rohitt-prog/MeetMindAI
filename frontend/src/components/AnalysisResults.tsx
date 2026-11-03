@@ -15,7 +15,8 @@ import {
   FileText,
   Database,
   Download,
-  RefreshCw
+  RefreshCw,
+  Clock
 } from 'lucide-react';
 import { 
   MeetingAnalysisResponse, 
@@ -63,6 +64,18 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
   const totalActionItems = analysis.action_items.length;
   const unassignedOwners = analysis.action_items.filter((a) => !a.owner).length;
 
+  // Compute open follow-ups from explicit response array plus deferred action items
+  const deferredActionItems = analysis.action_items.filter((a) =>
+    (a.status || '').toLowerCase().startsWith('deferred')
+  );
+  const rawFollowUps = analysis.open_follow_ups || [];
+  const openFollowUps = [
+    ...rawFollowUps,
+    ...deferredActionItems
+      .filter((a) => !rawFollowUps.some((rf) => rf.toLowerCase().includes(a.task.toLowerCase())))
+      .map((a) => `${a.task} (deferred to future meeting)`),
+  ];
+
   const handleExportPdf = async () => {
     setIsExporting(true);
     setExportError(null);
@@ -101,15 +114,22 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                 <span>{effectiveMeetingId}</span>
               </span>
             )}
-            {unresolvedClarifications.length > 0 ? (
+            {unresolvedClarifications.length > 0 && (
               <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                {unresolvedClarifications.length} Ambiguity Pending
+                {unresolvedClarifications.length} Clarification{unresolvedClarifications.length === 1 ? '' : 's'} Required
               </span>
-            ) : (
+            )}
+            {openFollowUps.length > 0 && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {openFollowUps.length} Open Follow-up{openFollowUps.length === 1 ? '' : 's'}
+              </span>
+            )}
+            {unresolvedClarifications.length === 0 && openFollowUps.length === 0 && (
               <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" />
-                All Clarified & Verified
+                Verified &bull; No Outstanding Issues
               </span>
             )}
           </div>
@@ -270,6 +290,13 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
               const hasRelatedClarification = unresolvedClarifications.some(
                 (c) => c.related_action_item_id === item.id
               );
+              const isDeferred = (item.status || '').toLowerCase().startsWith('deferred');
+              const hasDeadlineClarif = unresolvedClarifications.some(
+                (c) => c.related_action_item_id === item.id && c.category === 'deadline'
+              );
+              const hasOwnerClarif = unresolvedClarifications.some(
+                (c) => c.related_action_item_id === item.id && c.category === 'ownership'
+              );
 
               return (
                 <div
@@ -290,6 +317,12 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                           Ambiguity detected for this task &mdash; see clarifications below
                         </span>
                       )}
+                      {isDeferred && (
+                        <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-medium">
+                          <Clock className="w-3 h-3" />
+                          Owner or execution explicitly deferred to a future meeting
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -301,30 +334,62 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                         <User className="w-3 h-3 text-slate-400" />
                         <span>{item.owner}</span>
                       </span>
+                    ) : isDeferred ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                        <Clock className="w-3 h-3 text-indigo-500" />
+                        <span>Deferred to next meeting</span>
+                      </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                        hasOwnerClarif
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700'
+                          : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60'
+                      }`}>
                         <UserX className="w-3 h-3 text-amber-500" />
-                        <span>Unassigned</span>
+                        <span>{hasOwnerClarif ? 'Unassigned (Needs Clarification)' : 'Unassigned'}</span>
                       </span>
                     )}
 
                     {/* Deadline badge */}
                     {item.deadline ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                        hasDeadlineClarif
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                      }`}>
                         <Calendar className="w-3 h-3 text-slate-400" />
-                        <span>{item.deadline}</span>
+                        <span>{item.deadline}{hasDeadlineClarif ? ' (Clarification needed)' : ''}</span>
+                      </span>
+                    ) : isDeferred ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                        <Clock className="w-3 h-3" />
+                        <span>Deferred</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-800">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                        hasDeadlineClarif
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700'
+                          : 'bg-slate-100 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-800'
+                      }`}>
                         <CalendarX className="w-3 h-3" />
-                        <span>No deadline</span>
+                        <span>{hasDeadlineClarif ? 'Unspecified (Clarification needed)' : 'No deadline'}</span>
                       </span>
                     )}
 
                     {/* Status badge */}
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                      {item.status}
-                    </span>
+                    {isDeferred ? (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                        Deferred
+                      </span>
+                    ) : hasRelatedClarification ? (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
+                        Needs Clarification
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                        {item.status}
+                      </span>
+                    )}
                   </div>
                 </div>
               );
@@ -365,6 +430,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
       {/* Clarification Section */}
       <ClarificationSection
         clarifications={analysis.clarifications}
+        openFollowUps={openFollowUps}
         onClarify={onClarify}
         isClarifying={isClarifying}
         clarificationError={clarificationError}

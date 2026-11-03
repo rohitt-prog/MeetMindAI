@@ -253,3 +253,135 @@ def test_sanitize_filename_edge_cases():
     fn5 = pdf_service.sanitize_filename("   ", "")
     assert fn5 == "meetmind_meeting_report.pdf"
 
+
+def test_pdf_export_deferred_open_follow_ups():
+    """
+    Test PDF compilation for an analysis with deferred follow-ups.
+    Verifies that the PDF generates successfully and handles the deferred follow-ups cards.
+    """
+    analysis_with_followups = {
+        "summary": "Product launch meeting with deferred marketing task.",
+        "discussion_points": ["Marketing handoff", "Payment integration"],
+        "decisions": ["Deploy Stripe flow by Tuesday"],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Inform the marketing team",
+                "owner": None,
+                "deadline": None,
+                "status": "deferred: next meeting",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [],
+        "open_follow_ups": [
+            "Inform the marketing team (owner to be decided in next meeting)"
+        ],
+    }
+
+    pdf_bytes = pdf_service.generate_meeting_pdf(
+        analysis=MeetingAnalysisResponse.model_validate(analysis_with_followups),
+        title="Product Launch Planning Sync",
+        transcript="Maya: We need to inform marketing, but let's decide who will do that in the next meeting.",
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 1000
+    assert pdf_bytes.startswith(b"%PDF-")
+
+
+def test_pdf_export_vague_deadline_and_active_clarification():
+    """
+    Test PDF compilation with an action item having a preserved vague deadline ('Friday')
+    and an active clarification requirement.
+    """
+    analysis_vague_deadline = {
+        "summary": "QA team sync for regression testing.",
+        "discussion_points": ["Test environment readiness"],
+        "decisions": [],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Prepare the regression test report",
+                "owner": "David",
+                "deadline": "Friday",
+                "status": "pending",
+            }
+        ],
+        "clarification_required": True,
+        "clarification_question": "Which specific Friday is intended for the regression test report?",
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "deadline",
+                "original_statement": "David: I'll prepare the regression test report by Friday.",
+                "explanation": "Specific calendar Friday is unspecified.",
+                "question": "Which specific Friday is intended for the regression test report?",
+                "related_action_item_id": "action_1",
+                "resolved": False,
+            }
+        ],
+        "open_follow_ups": [],
+    }
+
+    pdf_bytes = pdf_service.generate_meeting_pdf(
+        analysis=MeetingAnalysisResponse.model_validate(analysis_vague_deadline),
+        title="QA Regression Sync",
+        transcript="David: I'll prepare the regression test report by Friday.",
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 1000
+    assert pdf_bytes.startswith(b"%PDF-")
+
+
+def test_pdf_export_resolved_meeting():
+    """
+    Test PDF compilation where clarifications were answered and marked resolved.
+    """
+    analysis_resolved = {
+        "summary": "Meeting with resolved clarifications.",
+        "discussion_points": ["Deployment timeline"],
+        "decisions": ["Deploy on Friday, Nov 14th"],
+        "action_items": [
+            {
+                "id": "action_1",
+                "task": "Execute deployment",
+                "owner": "David",
+                "deadline": "Friday, Nov 14th at 5 PM",
+                "status": "completed",
+            }
+        ],
+        "clarification_required": False,
+        "clarification_question": None,
+        "clarifications": [
+            {
+                "id": "clarif_1",
+                "category": "deadline",
+                "original_statement": "Deploy by Friday.",
+                "explanation": "Resolved with specific date.",
+                "question": "Which Friday?",
+                "related_action_item_id": "action_1",
+                "resolved": True,
+            }
+        ],
+        "open_follow_ups": [],
+    }
+
+    pdf_bytes = pdf_service.generate_meeting_pdf(
+        analysis=MeetingAnalysisResponse.model_validate(analysis_resolved),
+        title="Deployment Complete",
+        answers_history=[
+            {
+                "clarification_id": "clarif_1",
+                "answer": "Friday, Nov 14th at 5 PM",
+            }
+        ],
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 1000
+    assert pdf_bytes.startswith(b"%PDF-")
+
+

@@ -250,6 +250,13 @@ class FirebaseService:
             action_items = analysis_dict.get("action_items", [])
             decisions = analysis_dict.get("decisions", [])
             clarifications = analysis_dict.get("clarifications", [])
+            open_follow_ups = analysis_dict.get("open_follow_ups", [])
+            # Also count any action items with status deferred
+            deferred_action_items = [
+                a for a in action_items
+                if isinstance(a, dict) and str(a.get("status", "")).lower().startswith("deferred")
+            ]
+            total_follow_ups = max(len(open_follow_ups), len(deferred_action_items))
 
             unresolved_count = len([c for c in clarifications if not c.get("resolved")])
             summary_text = analysis_dict.get("summary", "")
@@ -265,6 +272,7 @@ class FirebaseService:
                     decisions_count=len(decisions),
                     clarification_required=analysis_dict.get("clarification_required", False),
                     unresolved_clarifications_count=unresolved_count,
+                    open_follow_ups_count=total_follow_ups,
                 )
             )
 

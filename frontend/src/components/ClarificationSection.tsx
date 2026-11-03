@@ -15,6 +15,7 @@ import { ClarificationItem, ClarificationAnswer } from '../types';
 
 interface ClarificationSectionProps {
   clarifications: ClarificationItem[];
+  openFollowUps?: string[];
   onClarify: (answers: ClarificationAnswer[]) => Promise<void>;
   isClarifying: boolean;
   clarificationError?: string | null;
@@ -23,6 +24,7 @@ interface ClarificationSectionProps {
 
 export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
   clarifications,
+  openFollowUps = [],
   onClarify,
   isClarifying,
   clarificationError,
@@ -121,13 +123,51 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
   };
 
   if (clarifications.length === 0) {
+    if (openFollowUps && openFollowUps.length > 0) {
+      return (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                0 Clarifications Required &bull; {openFollowUps.length} Open Follow-up{openFollowUps.length === 1 ? '' : 's'}
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                All active deliverables have clear assignments. The following item(s) are recorded as open follow-ups explicitly deferred to a future meeting:
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {openFollowUps.map((item, idx) => (
+              <div
+                key={idx}
+                className="p-3 rounded-lg bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200/60 dark:border-indigo-900/40 flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300"
+              >
+                <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+                <div className="space-y-0.5">
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-300 mr-1.5">[Open Follow-up]</span>
+                  <span>{item}</span>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Clarification required now: No (explicitly deferred in transcript).
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 text-center">
         <div className="w-10 h-10 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto mb-3">
           <CheckCircle2 className="w-5 h-5" />
         </div>
         <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-          No Ambiguities Detected
+          No Outstanding Issues Detected
         </h4>
         <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
           All action items, task ownerships, and deadlines in this transcript were clear and explicit. No follow-up questions needed.
@@ -293,6 +333,33 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
             </div>
           );
         })}
+
+        {/* Open Follow-ups & Deferred Items (Non-interactive) */}
+        {openFollowUps && openFollowUps.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Clock className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-300 uppercase tracking-wider">
+                Open Follow-ups &amp; Deferred Items ({openFollowUps.length})
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
+              The following item(s) are recorded as open follow-ups deferred to future discussion. No immediate clarification input is required:
+            </p>
+            {openFollowUps.map((item, idx) => (
+              <div
+                key={idx}
+                className="p-3 rounded-lg bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200/60 dark:border-indigo-900/40 flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300"
+              >
+                <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-300 mr-1.5">[Deferred]</span>
+                  <span>{item}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Resolved Clarifications List */}
         {resolvedItems.length > 0 && (
