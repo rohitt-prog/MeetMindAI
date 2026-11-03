@@ -15,8 +15,17 @@ from app.schemas.meeting import (
     ClarificationItem,
     MeetingAnalysisResponse,
 )
+from app.services.firebase_service import firebase_service
 
 client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def mock_firebase_in_meetings_tests():
+    orig_client = firebase_service._client
+    mock_client = MagicMock()
+    firebase_service.set_client(mock_client)
+    yield
+    firebase_service.set_client(orig_client)
 
 MOCK_INSIGHTS_DICT = {
     "summary": "The team aligned on the mobile app redesign milestones and resolved authentication blockers.",

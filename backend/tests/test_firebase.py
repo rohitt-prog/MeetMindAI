@@ -120,8 +120,8 @@ def test_firebase_unconfigured_error():
     """
     Test that GET /api/meetings returns 503 Service Unavailable when Firebase is not configured.
     """
-    unconfigured_service = FirebaseService()
-    unconfigured_service._client = None
+    unconfigured_service = MagicMock(spec=FirebaseService)
+    unconfigured_service.is_configured.return_value = False
 
     with patch("app.api.routes.meetings.firebase_service", unconfigured_service):
         response = client.get("/api/meetings")
