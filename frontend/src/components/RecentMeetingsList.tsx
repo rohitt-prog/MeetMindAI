@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { 
   Calendar, 
   Clock, 
@@ -10,10 +11,12 @@ import {
   Plus, 
   CheckCircle2,
   FolderOpen,
-  Download
+  Download,
+  Trash2
 } from 'lucide-react';
 import { MeetingListItem } from '../types';
 import { apiService } from '../services/api';
+import { DeleteMeetingModal } from './DeleteMeetingModal';
 
 interface RecentMeetingsListProps {
   meetings: MeetingListItem[];
@@ -23,6 +26,7 @@ interface RecentMeetingsListProps {
   onSelectMeeting: (meetingId: string) => void;
   onRefresh: () => void;
   onNewMeetingClick: () => void;
+  onDeleteMeeting?: (meetingId: string) => Promise<void>;
   compact?: boolean;
 }
 
@@ -34,9 +38,41 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
   onSelectMeeting,
   onRefresh,
   onNewMeetingClick,
+  onDeleteMeeting,
   compact = false,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [targetMeeting, setTargetMeeting] = useState<{ id: string; title?: string | null } | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleOpenDelete = (e: React.MouseEvent, m: MeetingListItem) => {
+    e.stopPropagation();
+    setDeleteError(null);
+    setTargetMeeting({ id: m.meeting_id, title: m.title });
+  };
+
+  const handleCloseDelete = () => {
+    if (!isDeleting) {
+      setTargetMeeting(null);
+      setDeleteError(null);
+    }
+  };
+
+  const handleConfirmDelete = async (meetingId: string) => {
+    if (!onDeleteMeeting) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDeleteMeeting(meetingId);
+      setTargetMeeting(null);
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete meeting.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleQuickExport = async (e: React.MouseEvent, meetingId: string) => {
     e.stopPropagation();
@@ -81,7 +117,7 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-0.5 rounded"
+            className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-0.5 rounded cursor-pointer"
             title="Refresh saved meetings"
           >
             <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
@@ -106,16 +142,16 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
             {meetings.slice(0, 5).map((m) => {
               const isActive = activeMeetingId === m.meeting_id;
               return (
-                <button
+                <div
                   key={m.meeting_id}
                   onClick={() => onSelectMeeting(m.meeting_id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors flex items-center justify-between group ${
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors flex items-center justify-between group cursor-pointer ${
                     isActive
                       ? 'bg-slate-900 text-white dark:bg-indigo-600 dark:text-white font-medium shadow-xs'
                       : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
                   }`}
                 >
-                  <div className="truncate pr-2">
+                  <div className="truncate pr-2 flex-1">
                     <p className="truncate font-medium text-[11px]">
                       {m.title || 'Untitled Meeting'}
                     </p>
@@ -123,14 +159,39 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
                       {formatTime(m.updated_at || m.created_at)}
                     </span>
                   </div>
-                  {m.clarification_required && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" title="Ambiguities pending" />
-                  )}
-                </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {m.clarification_required && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" title="Ambiguities pending" />
+                    )}
+                    {onDeleteMeeting && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenDelete(e, m)}
+                        className={`p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-100 dark:hover:bg-rose-950/60 cursor-pointer ${
+                          isActive ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400'
+                        }`}
+                        title="Delete meeting"
+                        aria-label="Delete meeting"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
         )}
+
+        <DeleteMeetingModal
+          isOpen={!!targetMeeting}
+          meetingId={targetMeeting?.id || null}
+          meetingTitle={targetMeeting?.title}
+          onClose={handleCloseDelete}
+          onConfirm={handleConfirmDelete}
+          isDeleting={isDeleting}
+          error={deleteError}
+        />
       </div>
     );
   }
@@ -206,8 +267,10 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
           {meetings.map((m) => {
             const isActive = activeMeetingId === m.meeting_id;
             return (
-              <div
+              <motion.div
                 key={m.meeting_id}
+                whileHover={shouldReduceMotion ? undefined : { y: -2 }}
+                transition={{ duration: 0.15, ease: 'easeOut' as const }}
                 onClick={() => onSelectMeeting(m.meeting_id)}
                 className={`group p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
                   isActive
@@ -241,7 +304,7 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     {m.clarification_required ? (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60">
                         <HelpCircle className="w-2.5 h-2.5" />
@@ -255,10 +318,12 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
                     )}
 
                     <button
+                      type="button"
                       onClick={(e) => handleQuickExport(e, m.meeting_id)}
                       disabled={exportingId === m.meeting_id}
-                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
                       title="Download PDF report for this meeting"
+                      aria-label="Download PDF report"
                     >
                       {exportingId === m.meeting_id ? (
                         <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
@@ -266,13 +331,35 @@ export const RecentMeetingsList: React.FC<RecentMeetingsListProps> = ({
                         <Download className="w-3.5 h-3.5" />
                       )}
                     </button>
+
+                    {onDeleteMeeting && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenDelete(e, m)}
+                        className="p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
+                        title="Delete meeting"
+                        aria-label="Delete meeting"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
       )}
+
+      <DeleteMeetingModal
+        isOpen={!!targetMeeting}
+        meetingId={targetMeeting?.id || null}
+        meetingTitle={targetMeeting?.title}
+        onClose={handleCloseDelete}
+        onConfirm={handleConfirmDelete}
+        isDeleting={isDeleting}
+        error={deleteError}
+      />
     </div>
   );
 };

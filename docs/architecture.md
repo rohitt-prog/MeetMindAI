@@ -36,6 +36,7 @@ graph TD
         ClarifyRoute["POST /api/meetings/clarify"]
         ListRoute["GET /api/meetings"]
         GetRoute["GET /api/meetings/{id}"]
+        DeleteRoute["DELETE /api/meetings/{id}"]
         ExportPostRoute["POST /api/meetings/export/pdf"]
         ExportGetRoute["GET /api/meetings/{id}/export/pdf"]
         
@@ -50,6 +51,7 @@ graph TD
         Router --> ClarifyRoute
         Router --> ListRoute
         Router --> GetRoute
+        Router --> DeleteRoute
         Router --> ExportPostRoute
         Router --> ExportGetRoute
         
@@ -60,6 +62,7 @@ graph TD
         ClarifyRoute --> FirebaseService
         ListRoute --> FirebaseService
         GetRoute --> FirebaseService
+        DeleteRoute --> FirebaseService
         ExportPostRoute --> PdfService
         ExportGetRoute --> FirebaseService
         ExportGetRoute --> PdfService
@@ -100,6 +103,7 @@ graph TD
 | `/api/meetings/clarify` | `POST` | Re-evaluation with clarification answers & in-place Firestore update | **Phase 3, 4, 5, 6 (Implemented)** |
 | `/api/meetings` | `GET` | Retrieve list of recent saved meetings from Firestore (with `limit` param) | **Phase 6 (Implemented)** |
 | `/api/meetings/{id}` | `GET` | Retrieve full meeting transcript, analysis, and answers history | **Phase 6 (Implemented)** |
+| `/api/meetings/{id}` | `DELETE` | Permanently delete saved meeting document from Firestore | **Phase 9 (Implemented)** |
 | `/api/meetings/export/pdf` | `POST` | Stream downloadable PDF report compiled from active/unsaved analysis | **Phase 7 (Implemented)** |
 | `/api/meetings/{id}/export/pdf` | `GET` | Stream downloadable PDF report compiled from saved Firestore record | **Phase 7 (Implemented)** |
 

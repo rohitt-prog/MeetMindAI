@@ -28,6 +28,7 @@ interface SidebarProps {
   activeMeetingId?: string | null;
   onSelectMeeting?: (meetingId: string) => void;
   onRefreshMeetings?: () => void;
+  onDeleteMeeting?: (meetingId: string) => Promise<void>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -43,6 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeMeetingId = null,
   onSelectMeeting,
   onRefreshMeetings,
+  onDeleteMeeting,
 }) => {
   const navItems = [
     { id: 'dashboard', label: 'Workspace', icon: LayoutDashboard, enabled: true },
@@ -120,6 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onSelectMeeting={(id) => onSelectMeeting && onSelectMeeting(id)}
             onRefresh={() => onRefreshMeetings && onRefreshMeetings()}
             onNewMeetingClick={() => setActiveTab('dashboard')}
+            onDeleteMeeting={onDeleteMeeting}
           />
         </div>
       </div>

@@ -241,6 +241,57 @@ class ApiServiceTestClient {
     }
   }
 
+  async deleteMeeting(meetingId) {
+    const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to delete meeting with status: ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+
+        if (response.status === 404) {
+          errorMessage = `Meeting '${meetingId}' not found or already deleted.`;
+        } else if (response.status === 503) {
+          errorMessage = 'Firebase Firestore is not configured on the backend.';
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Delete meeting request timed out after 15 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to delete meeting.`
+          );
+        }
+        throw err;
+      }
+      throw new Error(`An unexpected error occurred while deleting meeting '${meetingId}'.`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async exportMeetingPdf(request) {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
@@ -896,5 +947,63 @@ describe('Frontend API Service & State Integration Tests', () => {
     assert.ok(result.blob);
     assert.ok(capturedBody.analysis.open_follow_ups);
     assert.equal(capturedBody.analysis.open_follow_ups.length, 1);
+  });
+
+  it('Delete Meeting: sends DELETE request and returns confirmation', async () => {
+    let capturedUrl = '';
+    let capturedMethod = '';
+
+    globalThis.fetch = async (url, options) => {
+      capturedUrl = url;
+      capturedMethod = options.method;
+      return new Response(
+        JSON.stringify({
+          status: 'deleted',
+          meeting_id: 'm_test_del_123',
+          message: 'Meeting successfully deleted.',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    };
+
+    const res = await client.deleteMeeting('m_test_del_123');
+    assert.equal(res.status, 'deleted');
+    assert.equal(res.meeting_id, 'm_test_del_123');
+    assert.match(capturedUrl, /\/api\/meetings\/m_test_del_123$/);
+    assert.equal(capturedMethod, 'DELETE');
+  });
+
+  it('Delete Meeting: handles 404 when meeting not found or already deleted', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: "Meeting with ID 'm_missing_123' not found." }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.deleteMeeting('m_missing_123'),
+      /not found or already deleted/
+    );
+  });
+
+  it('Delete Meeting: handles 503 when Firebase Firestore is not configured', async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          detail: 'Firebase Firestore is not configured.',
+        }),
+        {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+
+    await assert.rejects(
+      async () => client.deleteMeeting('m_test_123'),
+      /Firebase Firestore is not configured/
+    );
   });
 });

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { 
   Sparkles, 
   CheckSquare, 
@@ -99,10 +100,24 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
     }
   };
 
+  const shouldReduceMotion = useReducedMotion();
+  const getMotionProps = (index: number) => ({
+    initial: shouldReduceMotion ? false : { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    transition: {
+      duration: 0.25,
+      delay: shouldReduceMotion ? 0 : index * 0.06,
+      ease: 'easeOut' as const,
+    },
+  });
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-6">
       {/* Top action / summary bar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <motion.div
+        {...getMotionProps(0)}
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+      >
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/20">
@@ -172,7 +187,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             <span>New Transcript</span>
           </button>
         </div>
-      </div>
+      </motion.div>
 
       {/* Export Error Alert Banner */}
       {exportError && (
@@ -192,7 +207,10 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
 
       {/* Expanded Transcript View if toggled */}
       {showTranscript && transcript && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs space-y-2">
+        <motion.div
+          {...getMotionProps(1)}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xs space-y-2"
+        >
           <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
             <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               <FileText className="w-3.5 h-3.5 text-indigo-500" />
@@ -205,11 +223,14 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
           <pre className="text-xs font-mono p-3 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
             {transcript}
           </pre>
-        </div>
+        </motion.div>
       )}
 
       {/* Grid: Summary & Discussion Points */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <motion.div
+        {...getMotionProps(1)}
+        className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+      >
         {/* Executive Summary (2 columns) */}
         <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col justify-between">
           <div>
@@ -270,10 +291,13 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             </p>
           )}
         </div>
-      </div>
+      </motion.div>
 
       {/* Action Items Section */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xs">
+      <motion.div
+        {...getMotionProps(2)}
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xs"
+      >
         <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 dark:border-slate-800/80">
           <div className="flex items-center gap-2 text-slate-900 dark:text-slate-100">
             <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -400,11 +424,14 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             No actionable tasks were identified in this transcript.
           </p>
         )}
-      </div>
+      </motion.div>
 
       {/* Discussion Points Section */}
       {analysis.discussion_points.length > 0 && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xs">
+        <motion.div
+          {...getMotionProps(3)}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xs"
+        >
           <div className="flex items-center gap-2 pb-3 mb-3 border-b border-slate-100 dark:border-slate-800/80 text-slate-900 dark:text-slate-100">
             <MessageSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-xs font-semibold uppercase tracking-wider">
@@ -424,18 +451,20 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
               </div>
             ))}
           </div>
-        </div>
+        </motion.div>
       )}
 
       {/* Clarification Section */}
-      <ClarificationSection
-        clarifications={analysis.clarifications}
-        openFollowUps={openFollowUps}
-        onClarify={onClarify}
-        isClarifying={isClarifying}
-        clarificationError={clarificationError}
-        onClearClarificationError={onClearClarificationError}
-      />
+      <motion.div {...getMotionProps(4)}>
+        <ClarificationSection
+          clarifications={analysis.clarifications}
+          openFollowUps={openFollowUps}
+          onClarify={onClarify}
+          isClarifying={isClarifying}
+          clarificationError={clarificationError}
+          onClearClarificationError={onClearClarificationError}
+        />
+      </motion.div>
     </div>
   );
 };

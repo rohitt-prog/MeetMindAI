@@ -338,5 +338,29 @@ class FirebaseService:
             answers_history=existing_history,
         )
 
+    def delete_meeting(self, meeting_id: str) -> None:
+        """
+        Permanently deletes a meeting document from Firestore by its meeting_id.
+        Raises FirebaseNotFoundError if the meeting does not exist.
+        """
+        db = self.get_client()
+        doc_ref = db.collection(self._collection_name).document(meeting_id)
+
+        try:
+            snapshot = doc_ref.get()
+        except Exception as e:
+            logger.error(f"Failed to check meeting {meeting_id} before deletion: {e}")
+            raise FirebaseOperationError(f"Firestore check failed: {str(e)}")
+
+        if not snapshot.exists:
+            raise FirebaseNotFoundError(f"Meeting with ID '{meeting_id}' not found.")
+
+        try:
+            doc_ref.delete()
+            logger.info(f"Permanently deleted Firestore meeting {meeting_id}.")
+        except Exception as e:
+            logger.error(f"Failed to delete meeting {meeting_id} from Firestore: {e}")
+            raise FirebaseOperationError(f"Failed to delete meeting from Firestore: {str(e)}")
+
 
 firebase_service = FirebaseService()

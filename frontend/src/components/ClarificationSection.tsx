@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { 
   HelpCircle, 
   CheckCircle2, 
@@ -30,6 +31,7 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
   clarificationError,
   onClearClarificationError,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submittingId, setSubmittingId] = useState<string | null>(null);
 
@@ -239,17 +241,23 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
 
       {/* Unresolved Clarifications List */}
       <div className="space-y-3.5">
-        {unresolvedItems.map((item) => {
-          const badge = getCategoryBadge(item.category);
-          const Icon = badge.icon;
-          const currentAnswer = answers[item.id] || '';
-          const isItemSubmitting = isClarifying && submittingId === item.id;
+        <AnimatePresence mode="popLayout">
+          {unresolvedItems.map((item) => {
+            const badge = getCategoryBadge(item.category);
+            const Icon = badge.icon;
+            const currentAnswer = answers[item.id] || '';
+            const isItemSubmitting = isClarifying && submittingId === item.id;
 
-          return (
-            <div
-              key={item.id}
-              className="bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-800/50 rounded-xl p-4 sm:p-5 shadow-2xs space-y-3 transition-colors"
-            >
+            return (
+              <motion.div
+                key={item.id}
+                layout={!shouldReduceMotion}
+                initial={shouldReduceMotion ? false : { opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, height: 0, marginBottom: 0, overflow: 'hidden' }}
+                transition={{ duration: 0.2, ease: 'easeOut' as const }}
+                className="bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-800/50 rounded-xl p-4 sm:p-5 shadow-2xs space-y-3 transition-colors"
+              >
               {/* Category & ID badge */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
@@ -330,9 +338,10 @@ export const ClarificationSection: React.FC<ClarificationSectionProps> = ({
                   </button>
                 </div>
               </div>
-            </div>
+            </motion.div>
           );
         })}
+        </AnimatePresence>
 
         {/* Open Follow-ups & Deferred Items (Non-interactive) */}
         {openFollowUps && openFollowUps.length > 0 && (

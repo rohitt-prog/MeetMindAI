@@ -14,7 +14,7 @@ This guide is designed for undergraduate and graduate Computer Science & Enginee
 >
 > *The system persists meeting records and clarification audit histories in **Firebase Cloud Firestore**, allows users to reopen historical meetings with zero data loss, and compiles executive-ready, multi-page meeting reports via a server-side **ReportLab PDF engine**.*
 >
-> *The platform is built with React 18, TypeScript, and Tailwind CSS on the frontend, and Python 3.11 with FastAPI on the backend, supported by 38 automated backend tests and 16 frontend unit tests."*
+> *The platform is built with React 18, TypeScript, Tailwind CSS, and Framer Motion on the frontend, and Python 3.11 with FastAPI on the backend, supported by 52 automated backend tests and 21 frontend unit tests."*
 
 ---
 

@@ -77,9 +77,14 @@ def create_mock_firestore_client(existing_docs=None):
                     raise Exception("Document not found for update")
                 existing_docs[doc_id].update(data)
 
+            def mock_delete():
+                if doc_id in existing_docs:
+                    del existing_docs[doc_id]
+
             mock_doc.get.side_effect = mock_get
             mock_doc.set.side_effect = mock_set
             mock_doc.update.side_effect = mock_update
+            mock_doc.delete.side_effect = mock_delete
             return mock_doc
 
         def mock_order_by(field, direction=None):
@@ -463,3 +468,96 @@ def test_firestore_operation_failure():
         assert "Firestore connection timed out" in response.json()["detail"]
     finally:
         firebase_service._client = orig_firestore_client
+
+
+def test_delete_meeting_success():
+    """
+    Test successful deletion of a saved meeting from Firestore.
+    """
+    docs = {"m_to_delete_1": dict(MOCK_SAVED_MEETING_DATA)}
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings/m_to_delete_1")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "deleted"
+        assert data["meeting_id"] == "m_to_delete_1"
+        assert "m_to_delete_1" not in docs
+
+        # Subsequent retrieval should return 404
+        get_res = client.get("/api/meetings/m_to_delete_1")
+        assert get_res.status_code == 404
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_delete_meeting_not_found():
+    """
+    Test deleting a non-existent meeting returns 404.
+    """
+    docs = {}
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings/m_nonexistent_999")
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_delete_meeting_unconfigured():
+    """
+    Test that deleting when Firebase is unconfigured returns 503.
+    """
+    with patch.object(firebase_service, "is_configured", return_value=False):
+        response = client.delete("/api/meetings/m_test_123")
+        assert response.status_code == 503
+        assert "not configured" in response.json()["detail"].lower()
+
+
+def test_delete_meeting_invalid_id():
+    """
+    Test that invalid meeting ID format returns 400.
+    """
+    mock_db = create_mock_firestore_client({})
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings/bad%20id%24%24")
+        assert response.status_code == 400
+        assert "invalid meeting id format" in response.json()["detail"].lower()
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_export_pdf_after_delete_returns_404():
+    """
+    Test that requesting PDF export on a deleted meeting returns 404.
+    """
+    docs = {"m_to_delete_pdf": dict(MOCK_SAVED_MEETING_DATA)}
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        # Pre-check: PDF export succeeds while meeting exists
+        pre_res = client.get("/api/meetings/m_to_delete_pdf/export/pdf")
+        assert pre_res.status_code == 200
+
+        # Delete meeting
+        del_res = client.delete("/api/meetings/m_to_delete_pdf")
+        assert del_res.status_code == 200
+
+        # PDF export now fails with 404
+        post_res = client.get("/api/meetings/m_to_delete_pdf/export/pdf")
+        assert post_res.status_code == 404
+        assert "not found" in post_res.json()["detail"].lower()
+    finally:
+        firebase_service._client = orig_client

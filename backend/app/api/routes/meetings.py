@@ -6,6 +6,7 @@ from app.schemas.meeting import (
     MeetingAnalysisRequest,
     MeetingAnalysisResponse,
     MeetingClarificationRequest,
+    MeetingDeleteResponse,
     MeetingDetailResponse,
     MeetingListItem,
     MeetingPdfExportRequest,
@@ -221,6 +222,68 @@ def get_meeting_details(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve meeting '{meeting_id}': {str(e)}",
         )
+
+
+@router.delete(
+    "/{meeting_id}",
+    response_model=MeetingDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete Saved Meeting",
+    description="Permanently deletes a saved meeting document from Cloud Firestore.",
+)
+def delete_saved_meeting(meeting_id: str) -> MeetingDeleteResponse:
+    """
+    Endpoint to permanently delete a saved meeting from Firestore.
+    """
+    if not meeting_id or not meeting_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meeting ID cannot be empty.",
+        )
+
+    clean_id = meeting_id.strip()
+    # Meeting ID format validation: alphanumeric with underscores and hyphens
+    if not all(c.isalnum() or c in ("_", "-") for c in clean_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid meeting ID format: '{meeting_id}'",
+        )
+
+    if not firebase_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase Firestore is not configured. Please configure FIREBASE_PROJECT_ID and credentials in backend/.env.",
+        )
+
+    try:
+        firebase_service.delete_meeting(meeting_id=clean_id)
+        return MeetingDeleteResponse(
+            status="deleted",
+            meeting_id=clean_id,
+            message="Meeting successfully deleted.",
+        )
+    except FirebaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except FirebaseConfigError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        )
+    except FirebaseOperationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error deleting meeting '{clean_id}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete meeting '{clean_id}': {str(e)}",
+        )
+
 
 
 @router.get(

@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { LucideIcon } from 'lucide-react';
 
 interface StatsCardProps {
@@ -9,6 +10,7 @@ interface StatsCardProps {
   badge?: string;
   iconColor?: string;
   badgeColor?: string;
+  delay?: number;
 }
 
 export const StatsCard: React.FC<StatsCardProps> = ({
@@ -19,9 +21,18 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   badge = 'Active',
   iconColor = 'text-indigo-600 dark:text-indigo-400',
   badgeColor = 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400',
+  delay = 0,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
+
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 shadow-2xs hover:border-slate-300 dark:hover:border-slate-700/80 transition-all">
+    <motion.div
+      initial={shouldReduceMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: shouldReduceMotion ? 0 : delay, ease: 'easeOut' as const }}
+      whileHover={shouldReduceMotion ? undefined : { y: -2 }}
+      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 shadow-2xs hover:border-slate-300 dark:hover:border-slate-700/80 transition-colors"
+    >
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{title}</p>
@@ -42,6 +53,6 @@ export const StatsCard: React.FC<StatsCardProps> = ({
           {badge}
         </span>
       </div>
-    </div>
+    </motion.div>
   );
 };

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './pages/Dashboard';
 import { 
@@ -242,6 +244,26 @@ export function App() {
     setAnalysisState((prev) => ({ ...prev, clarificationError: null }));
   };
 
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Permanently delete a meeting from Firestore and update state
+  const handleDeleteMeeting = async (meetingId: string) => {
+    try {
+      await apiService.deleteMeeting(meetingId);
+      setRecentMeetings((prev) => prev.filter((m) => m.meeting_id !== meetingId));
+      if (currentMeetingId === meetingId) {
+        handleResetMeeting();
+      }
+      setToast({ message: 'Meeting deleted successfully.', type: 'success' });
+      setTimeout(() => setToast(null), 3500);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete meeting.';
+      setToast({ message, type: 'error' });
+      setTimeout(() => setToast(null), 4000);
+      throw err;
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 antialiased transition-colors">
       <Sidebar
@@ -257,6 +279,7 @@ export function App() {
         activeMeetingId={currentMeetingId}
         onSelectMeeting={handleSelectMeeting}
         onRefreshMeetings={fetchRecentMeetings}
+        onDeleteMeeting={handleDeleteMeeting}
       />
       <Dashboard
         connectionState={connectionState}
@@ -269,6 +292,7 @@ export function App() {
         activeMeetingId={currentMeetingId}
         onSelectMeeting={handleSelectMeeting}
         onRefreshMeetings={fetchRecentMeetings}
+        onDeleteMeeting={handleDeleteMeeting}
         currentTranscript={currentTranscript}
         currentTitle={currentTitle}
         currentMeetingId={currentMeetingId}
@@ -278,6 +302,32 @@ export function App() {
         onResetMeeting={handleResetMeeting}
         onClearClarificationError={handleClearClarificationError}
       />
+
+      {/* Floating Status Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-xs font-medium shadow-xl border backdrop-blur-md ${
+              toast.type === 'success'
+                ? 'bg-slate-900/95 dark:bg-slate-800/95 text-white border-slate-700/80'
+                : 'bg-rose-900/95 text-white border-rose-700'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {toast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-300 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

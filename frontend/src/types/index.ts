@@ -95,6 +95,12 @@ export interface MeetingPdfExportRequest {
   }>;
 }
 
+export interface MeetingDeleteResponse {
+  status: string;
+  meeting_id: string;
+  message?: string;
+}
+
 export interface AnalysisState {
   isLoading: boolean;
   isClarifying: boolean;

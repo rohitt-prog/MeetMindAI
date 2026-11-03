@@ -7,7 +7,7 @@
 [![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%20API-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/)
 [![Firebase](https://img.shields.io/badge/Database-Firebase%20Firestore-FFCA28.svg?logo=firebase&logoColor=black)](https://firebase.google.com/)
 [![PDF Export](https://img.shields.io/badge/Export-ReportLab%20PDF-E11D48.svg?logo=adobe-acrobat-reader&logoColor=white)](https://www.reportlab.com/)
-[![Phase](https://img.shields.io/badge/Phase-8%3A%20Final%20Validation%20%26%20Viva%20Preparation-emerald)](README.md)
+[![Phase](https://img.shields.io/badge/Phase-9%3A%20History%20Management%20%26%20Motion%20Polish-emerald)](README.md)
 
 **MeetMind AI** is an intelligent assistant engineered to bridge the gap between spoken or transcribed meeting conversations and structured execution. It converts raw, unstructured meeting transcripts into actionable summaries, decisions, explicit task ownership, strict deadlines, and clarifying questions—with full cloud persistence in Firebase Cloud Firestore and publication-grade PDF report exports.
 
@@ -44,23 +44,24 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 
 ## 3. Technology Stack
 
-### Frontend (Implemented in Phase 1, 4, 6 & 7)
+### Frontend (Implemented in Phase 1, 4, 6, 7 & 9)
 - **Framework**: React 18 with Vite
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS (Modern productivity UI with light/dark theme toggle, subtle borders, indigo accent)
+- **Animations**: Framer Motion (`framer-motion`) — subtle page transitions, staggered entrance metrics, indeterminate multi-stage loader, smooth expand/collapse, and accessible spring modal dialogs respecting `prefers-reduced-motion`
 - **Icons**: Lucide React
 - **HTTP Client**: Centralized Fetch API client (`apiService`) with robust error classification and binary blob download handlers
-- **Testing**: Native Node.js test runner (`node:test`, 18 automated unit tests)
+- **Testing**: Native Node.js test runner (`node:test`, 21 automated unit tests)
 
-### Backend (Implemented in Phase 1, 2, 3, 6 & 7)
+### Backend (Implemented in Phase 1, 2, 3, 6, 7 & 9)
 - **Framework**: Python 3.11+ with FastAPI
 - **Server**: Uvicorn (ASGI)
 - **AI Integration**: Google Gemini API via official `google-genai` Python SDK
 - **Model**: `gemini-2.5-flash` (configurable)
-- **Database & Persistence**: Firebase Cloud Firestore via official `firebase-admin` Python SDK
+- **Database & Persistence**: Firebase Cloud Firestore via official `firebase-admin` Python SDK (with complete CRUD: persist, query, detail retrieval, clarification update, and permanent deletion)
 - **PDF Compilation**: ReportLab (`reportlab>=4.2.0`) with custom two-pass canvas (`NumberedCanvas`) and auto-wrapping tables
 - **Validation & Settings**: Pydantic v2 & `pydantic-settings`
-- **Testing**: Pytest & HTTPX TestClient with mocked Gemini, Firestore, and PDF compiler calls (47 automated tests)
+- **Testing**: Pytest & HTTPX TestClient with mocked Gemini, Firestore, and PDF compiler calls (52 automated tests)
 - **Middleware**: Fast CORS middleware configured for Vite development servers
 
 ---
@@ -86,7 +87,8 @@ MeetMind AI automates the extraction and structuring of these elements, actively
 | **Firebase Firestore Persistence** | Completed | Cloud Firestore integration via `firebase-admin`, document storage, list recent meetings, detail retrieval, and in-place updates. |
 | **Meeting History & Reopen UI** | Completed | History tab and sidebar meeting list, one-click meeting reopening, transcript viewer toggle, and "New Meeting" reset. |
 | **PDF Meeting Report Export** | Completed | Publication-grade server-side PDF generator using ReportLab with multi-page handling, safe filename sanitization, and browser download actions. |
-| **Final Validation, Docs & Viva Prep** | **Completed (Phase 8)** | Full test coverage (47 backend, 18 frontend), zero-credential test suite, clean build, 4-way ambiguity classification, and 25-question technical viva preparation guide. |
+| **Final Validation, Docs & Viva Prep** | Completed | Full test coverage (47 backend, 18 frontend), zero-credential test suite, clean build, 4-way ambiguity classification, and 25-question technical viva preparation guide. |
+| **History Deletion & Motion Polish** | **Completed (Phase 9)** | `DELETE /api/meetings/{id}` endpoint, accessible confirmation dialog, Firestore cleanup, 404 cascade for PDF export, Framer Motion transitions, staggered cards, indeterminate multi-stage loader, and toast alerts. |
 
 ---
 
@@ -387,6 +389,22 @@ Fetches a persisted meeting from Cloud Firestore and compiles it into a download
 - Header: `Content-Type: application/pdf`
 - Header: `Content-Disposition: attachment; filename="meetmind_meet_a1b2c3d4e5f6.pdf"`
 - Body: Binary PDF stream
+
+---
+
+### 8.7 Delete Saved Meeting
+`DELETE /api/meetings/{meeting_id}`
+
+Permanently removes a meeting document from Cloud Firestore. Validation checks ensure valid alphanumeric meeting IDs. After deletion, any subsequent attempts to retrieve or export the meeting report return `404 Not Found`.
+
+**Response Body**:
+```json
+{
+  "status": "deleted",
+  "meeting_id": "m_1730650000_a1b2c3d4",
+  "message": "Meeting successfully deleted."
+}
+```
 
 ---
 
