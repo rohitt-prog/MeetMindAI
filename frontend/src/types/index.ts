@@ -1,3 +1,5 @@
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 export interface HealthCheckResponse {
   status: string;
   app: string;
@@ -9,6 +11,7 @@ export interface BackendConnectionState {
   appName?: string;
   error?: string;
   lastChecked?: Date;
+  latencyMs?: number;
 }
 
 export interface ActionItem {

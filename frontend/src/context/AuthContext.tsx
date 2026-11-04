@@ -6,6 +6,8 @@ import {
   createUserWithEmailAndPassword,
   signInAnonymously,
   signOut,
+  updateProfile,
+  sendPasswordResetEmail,
 } from 'firebase/auth';
 import { auth, isFirebaseClientConfigured } from '../config/firebase';
 import { apiService } from '../services/api';
@@ -15,6 +17,8 @@ export interface AuthUser {
   email: string | null;
   displayName: string | null;
   isDemoUser?: boolean;
+  createdAt?: string | null;
+  lastLoginAt?: string | null;
 }
 
 interface AuthContextType {
@@ -28,6 +32,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   clearError: () => void;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
+  updateDisplayName: (name: string) => Promise<void>;
+  sendPasswordReset: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -46,6 +52,8 @@ const formatAuthError = (code: string, fallbackMessage: string): string => {
       return 'Password is too weak. Please use at least 6 characters.';
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
+    case 'auth/missing-email':
+      return 'An email address is required to process this request.';
     case 'auth/network-request-failed':
       return 'Network connection failed. Please check your internet connection.';
     case 'auth/too-many-requests':
@@ -172,6 +180,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             firebaseUser.displayName ||
             (isDemo ? 'Demo User' : (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'User')),
           isDemoUser: isDemo,
+          createdAt: firebaseUser.metadata?.creationTime || null,
+          lastLoginAt: firebaseUser.metadata?.lastSignInTime || null,
         });
       } else {
         if (!sessionStorage.getItem('meetmind_demo_user')) {
@@ -200,6 +210,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         displayName:
           cred.user.displayName ||
           (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
+        createdAt: cred.user.metadata?.creationTime || null,
+        lastLoginAt: cred.user.metadata?.lastSignInTime || null,
       });
     } catch (err: unknown) {
       const fbErr = err as { code?: string; message?: string };
@@ -226,6 +238,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         displayName:
           cred.user.displayName ||
           (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
+        createdAt: cred.user.metadata?.creationTime || null,
+        lastLoginAt: cred.user.metadata?.lastSignInTime || null,
       });
     } catch (err: unknown) {
       const fbErr = err as { code?: string; message?: string };
@@ -266,6 +280,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             email: cred.user.email,
             displayName: cred.user.displayName || 'Demo User',
             isDemoUser: true,
+            createdAt: cred.user.metadata?.creationTime || null,
+            lastLoginAt: cred.user.metadata?.lastSignInTime || null,
           };
           sessionStorage.setItem('meetmind_demo_user', JSON.stringify(demoUser));
           setUser(demoUser);
@@ -280,6 +296,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 email: newCred.user.email,
                 displayName: 'Demo User',
                 isDemoUser: true,
+                createdAt: newCred.user.metadata?.creationTime || null,
+                lastLoginAt: newCred.user.metadata?.lastSignInTime || null,
               };
               sessionStorage.setItem('meetmind_demo_user', JSON.stringify(demoUser));
               setUser(demoUser);
@@ -300,12 +318,71 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         email: 'demo@meetmind.ai',
         displayName: 'Demo User',
         isDemoUser: true,
+        createdAt: anonCred.user.metadata?.creationTime || new Date().toUTCString(),
+        lastLoginAt: anonCred.user.metadata?.lastSignInTime || new Date().toUTCString(),
       };
       sessionStorage.setItem('meetmind_demo_user', JSON.stringify(anonDemoUser));
       setUser(anonDemoUser);
     } catch (err: unknown) {
       const fbErr = err as { code?: string; message?: string };
       const formatted = formatAuthError(fbErr.code || '', fbErr.message || 'Demo sign-in failed.');
+      setAuthError(formatted);
+      throw new Error(formatted);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateDisplayName = async (name: string): Promise<void> => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      throw new Error('Display name cannot be empty.');
+    }
+    if (trimmed.length > 50) {
+      throw new Error('Display name cannot exceed 50 characters.');
+    }
+    setLoading(true);
+    setAuthError(null);
+    try {
+      if (isConfigured && auth.currentUser) {
+        await updateProfile(auth.currentUser, { displayName: trimmed });
+      }
+      setUser((prev) => (prev ? { ...prev, displayName: trimmed } : null));
+
+      const savedDemo = sessionStorage.getItem('meetmind_demo_user');
+      if (savedDemo) {
+        try {
+          const parsed = JSON.parse(savedDemo);
+          parsed.displayName = trimmed;
+          sessionStorage.setItem('meetmind_demo_user', JSON.stringify(parsed));
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err: unknown) {
+      const fbErr = err as { code?: string; message?: string };
+      const formatted = formatAuthError(fbErr.code || '', fbErr.message || 'Failed to update display name.');
+      setAuthError(formatted);
+      throw new Error(formatted);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendPasswordReset = async (): Promise<void> => {
+    if (!user || user.isDemoUser || !user.email) {
+      throw new Error('Password reset is only available for registered email accounts.');
+    }
+    if (!isConfigured) {
+      throw new Error('Firebase Authentication is not configured.');
+    }
+    setLoading(true);
+    setAuthError(null);
+    try {
+      await sendPasswordResetEmail(auth, user.email);
+    } catch (err: unknown) {
+      const fbErr = err as { code?: string; message?: string };
+      const formatted = formatAuthError(fbErr.code || '', fbErr.message || 'Failed to send password reset email.');
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
@@ -346,6 +423,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         logout,
         clearError,
         getIdToken,
+        updateDisplayName,
+        sendPasswordReset,
       }}
     >
       {children}

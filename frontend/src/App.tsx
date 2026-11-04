@@ -10,16 +10,29 @@ import {
   AnalysisState, 
   MeetingListItem, 
   MeetingAnalysisRequest, 
-  ClarificationAnswer 
+  ClarificationAnswer,
+  ThemeMode,
 } from './types';
 import { apiService } from './services/api';
 
 function AppContent() {
   const { user, loading: isAuthLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem('meetmind_theme');
+    if (saved === 'dark' || saved === 'light' || saved === 'system') {
+      return saved;
+    }
+    return 'system';
+  });
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem('meetmind_theme');
-    if (saved) return saved === 'dark';
+    if (saved === 'dark') return true;
+    if (saved === 'light') return false;
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
     return false;
   });
 
@@ -72,36 +85,61 @@ function AppContent() {
 
   const checkBackendHealth = useCallback(async () => {
     setConnectionState((prev) => ({ ...prev, isLoading: true, error: undefined }));
+    const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
       const data = await apiService.getHealth();
+      const latencyMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime);
       setConnectionState({
         isConnected: data.status === 'ok',
         isLoading: false,
         appName: data.app,
+        latencyMs,
         lastChecked: new Date(),
       });
     } catch (err: unknown) {
+      const latencyMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime);
       const message = err instanceof Error ? err.message : 'Unknown connection error';
       setConnectionState({
         isConnected: false,
         isLoading: false,
         error: message,
+        latencyMs,
         lastChecked: new Date(),
       });
     }
   }, []);
 
   useEffect(() => {
-    // Sync theme class on <html>
+    // Sync theme class on <html> and react to system changes
     const root = document.documentElement;
-    if (isDarkMode) {
-      root.classList.add('dark');
-      localStorage.setItem('meetmind_theme', 'dark');
+    localStorage.setItem('meetmind_theme', themeMode);
+
+    if (themeMode === 'system') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const applySystemTheme = (matches: boolean) => {
+        setIsDarkMode(matches);
+        if (matches) {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+      };
+
+      applySystemTheme(mediaQuery.matches);
+
+      const listener = (e: MediaQueryListEvent) => applySystemTheme(e.matches);
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
     } else {
-      root.classList.remove('dark');
-      localStorage.setItem('meetmind_theme', 'light');
+      const dark = themeMode === 'dark';
+      setIsDarkMode(dark);
+      if (dark) {
+        root.classList.add('dark');
+      } else {
+        root.classList.remove('dark');
+      }
     }
-  }, [isDarkMode]);
+  }, [themeMode]);
 
   useEffect(() => {
     // Health check on mount and interval
@@ -121,7 +159,7 @@ function AppContent() {
   }, [user, fetchRecentMeetings]);
 
   const toggleTheme = () => {
-    setIsDarkMode((prev) => !prev);
+    setThemeMode(isDarkMode ? 'light' : 'dark');
   };
 
   // Analyze new transcript
@@ -312,6 +350,8 @@ function AppContent() {
         onRefreshHealth={checkBackendHealth}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        themeMode={themeMode}
+        onSelectThemeMode={setThemeMode}
         recentMeetings={recentMeetings}
         isLoadingMeetings={isLoadingMeetings}
         meetingsError={meetingsError}

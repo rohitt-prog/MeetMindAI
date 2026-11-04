@@ -49,10 +49,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteMeeting,
 }) => {
   const { user, logout } = useAuth();
-  const navItems = [
+  interface NavItem {
+    id: string;
+    label: string;
+    icon: typeof LayoutDashboard;
+    enabled: boolean;
+    badge?: string;
+  }
+
+  const navItems: NavItem[] = [
     { id: 'dashboard', label: 'Workspace', icon: LayoutDashboard, enabled: true },
     { id: 'meetings', label: 'History', icon: Calendar, enabled: true },
-    { id: 'settings', label: 'Settings', icon: Settings, enabled: false, badge: 'Future' },
+    { id: 'settings', label: 'Settings', icon: Settings, enabled: true },
   ];
 
   return (

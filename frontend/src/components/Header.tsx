@@ -7,12 +7,14 @@ interface HeaderProps {
   onNewMeetingClick: () => void;
   connectionState: BackendConnectionState;
   hasActiveAnalysis?: boolean;
+  activeTab?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onNewMeetingClick,
   connectionState,
   hasActiveAnalysis = false,
+  activeTab = 'dashboard',
 }) => {
   const { user, logout } = useAuth();
 
@@ -24,13 +26,22 @@ export const Header: React.FC<HeaderProps> = ({
     ? user.displayName.charAt(0).toUpperCase()
     : 'U';
 
+  const breadcrumbSection =
+    activeTab === 'settings'
+      ? 'Settings & Preferences'
+      : activeTab === 'meetings'
+      ? 'Meeting History & Persistence'
+      : hasActiveAnalysis
+      ? 'Meeting Analysis & Clarifications'
+      : 'Transcript Ingestion';
+
   return (
     <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/40 backdrop-blur px-6 sm:px-8 flex items-center justify-between shrink-0 transition-colors">
       <div className="flex items-center gap-2.5">
         <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Workspace</span>
         <span className="text-slate-300 dark:text-slate-600">/</span>
         <span className="text-xs font-semibold text-slate-900 dark:text-slate-200">
-          {hasActiveAnalysis ? 'Meeting Analysis & Clarifications' : 'Transcript Ingestion'}
+          {breadcrumbSection}
         </span>
       </div>
 

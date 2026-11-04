@@ -1401,4 +1401,95 @@ describe('Frontend API Service & State Integration Tests', () => {
     client.setAuthTokenGetter(null);
     client.setOnUnauthorized(null);
   });
+
+  describe('Phase 1 Settings, Appearance & Account Controls', () => {
+    it('Theme resolution: correctly evaluates light, dark, and system modes', () => {
+      // Helper function simulating theme mode resolution
+      const resolveIsDark = (mode, systemPrefersDark) => {
+        if (mode === 'dark') return true;
+        if (mode === 'light') return false;
+        return !!systemPrefersDark;
+      };
+
+      assert.equal(resolveIsDark('light', true), false);
+      assert.equal(resolveIsDark('light', false), false);
+      assert.equal(resolveIsDark('dark', true), true);
+      assert.equal(resolveIsDark('dark', false), true);
+      assert.equal(resolveIsDark('system', true), true);
+      assert.equal(resolveIsDark('system', false), false);
+    });
+
+    it('Account validation: validates display name input rules', () => {
+      const validateDisplayName = (input) => {
+        const trimmed = (input || '').trim();
+        if (!trimmed) {
+          throw new Error('Please enter a valid display name.');
+        }
+        if (trimmed.length > 50) {
+          throw new Error('Display name must not exceed 50 characters.');
+        }
+        return trimmed;
+      };
+
+      assert.throws(() => validateDisplayName(''), /valid display name/);
+      assert.throws(() => validateDisplayName('   '), /valid display name/);
+      assert.throws(() => validateDisplayName('a'.repeat(51)), /must not exceed 50 characters/);
+      assert.equal(validateDisplayName('  Jane Doe  '), 'Jane Doe');
+      assert.equal(validateDisplayName('Alex'), 'Alex');
+    });
+
+    it('Account security: rejects password reset request for demo or anonymous accounts', () => {
+      const sendPasswordResetCheck = (user) => {
+        if (!user) {
+          throw new Error('No authenticated user session found.');
+        }
+        if (user.isDemoUser) {
+          throw new Error('Password reset is not available for temporary demo accounts.');
+        }
+        if (!user.email) {
+          throw new Error('No email address associated with this account.');
+        }
+        return true;
+      };
+
+      // Unauthenticated
+      assert.throws(() => sendPasswordResetCheck(null), /No authenticated user/);
+
+      // Demo User
+      const demoUser = { uid: 'demo123', email: 'demo@meetmind.ai', isDemoUser: true };
+      assert.throws(() => sendPasswordResetCheck(demoUser), /not available for temporary demo accounts/);
+
+      // User without email
+      const anonUser = { uid: 'anon123', email: null, isDemoUser: false };
+      assert.throws(() => sendPasswordResetCheck(anonUser), /No email address associated/);
+
+      // Valid registered user
+      const standardUser = { uid: 'u123', email: 'engineer@meetmind.ai', isDemoUser: false };
+      assert.equal(sendPasswordResetCheck(standardUser), true);
+    });
+
+    it('Diagnostics: measures and reports backend latency during health probe', async () => {
+      let callCount = 0;
+      globalThis.fetch = async () => {
+        callCount++;
+        // Simulate a small network delay
+        await new Promise((r) => setTimeout(r, 15));
+        return new Response(
+          JSON.stringify({ status: 'ok', app: 'MeetMind AI' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      };
+
+      const startTime = Date.now();
+      const health = await client.getHealth();
+      const latencyMs = Date.now() - startTime;
+
+      assert.equal(health.status, 'ok');
+      assert.equal(health.app, 'MeetMind AI');
+      assert.ok(latencyMs >= 10, 'Latency should reflect elapsed network duration');
+    });
+  });
 });

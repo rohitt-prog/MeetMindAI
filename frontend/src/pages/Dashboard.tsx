@@ -15,12 +15,14 @@ import { TranscriptWorkspace } from '../components/TranscriptWorkspace';
 import { AnalysisLoadingState } from '../components/AnalysisLoadingState';
 import { AnalysisResults } from '../components/AnalysisResults';
 import { RecentMeetingsList } from '../components/RecentMeetingsList';
+import { Settings } from '../components/Settings';
 import { 
   BackendConnectionState, 
   AnalysisState, 
   MeetingAnalysisRequest, 
   ClarificationAnswer,
-  MeetingListItem 
+  MeetingListItem,
+  ThemeMode,
 } from '../types';
 
 interface DashboardProps {
@@ -43,6 +45,8 @@ interface DashboardProps {
   onResetMeeting?: () => void;
   onClearClarificationError?: () => void;
   onDeleteMeeting?: (meetingId: string) => Promise<void>;
+  themeMode?: ThemeMode;
+  onSelectThemeMode?: (mode: ThemeMode) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -75,6 +79,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onClarify,
   onResetMeeting,
   onClearClarificationError,
+  themeMode = 'system',
+  onSelectThemeMode,
 }) => {
   const shouldReduceMotion = useReducedMotion();
   const newMeetingInputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +111,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         onNewMeetingClick={handleFocusNewMeeting} 
         connectionState={connectionState}
         hasActiveAnalysis={!!analysisData}
+        activeTab={activeTab}
       />
 
       {/* Main Content Area */}
@@ -141,6 +148,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 onRefresh={() => onRefreshMeetings && onRefreshMeetings()}
                 onNewMeetingClick={handleFocusNewMeeting}
                 onDeleteMeeting={onDeleteMeeting}
+              />
+            </motion.div>
+          ) : activeTab === 'settings' ? (
+            /* Settings View */
+            <motion.div
+              key="settings"
+              initial={shouldReduceMotion ? false : { opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+              transition={{ duration: 0.18, ease: 'easeOut' as const }}
+              className="space-y-6"
+            >
+              <Settings
+                connectionState={connectionState}
+                onRefreshHealth={onRefreshHealth}
+                themeMode={themeMode}
+                onSelectThemeMode={onSelectThemeMode || (() => {})}
               />
             </motion.div>
           ) : (
