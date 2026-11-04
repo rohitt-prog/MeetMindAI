@@ -2,7 +2,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 import logging
 
+from app.core.config import settings
 from app.core.auth import get_current_user, AuthenticatedUser
+from app.core.rate_limit import require_rate_limit
 from app.schemas.meeting import (
     MeetingAnalysisRequest,
     MeetingAnalysisResponse,
@@ -28,6 +30,17 @@ from app.services.pdf_service import pdf_service
 logger = logging.getLogger("meetmind-ai.meetings")
 
 router = APIRouter(tags=["Meetings"])
+
+
+def safe_error_message(e: Exception, status_code: int, default_message: str) -> str:
+    """
+    Returns sanitized error message for client response.
+    In production, always returns sanitized default message to prevent information leakage.
+    For 500 internal errors, never exposes raw internal exception details.
+    """
+    if settings.ENVIRONMENT.lower() == "production" or status_code == status.HTTP_500_INTERNAL_SERVER_ERROR:
+        return default_message
+    return str(e)
 
 
 def validate_document_id(doc_id: str) -> str:
@@ -62,7 +75,7 @@ def validate_document_id(doc_id: str) -> str:
 )
 def analyze_meeting_transcript(
     request: MeetingAnalysisRequest,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_rate_limit("analyze", lambda: settings.RATE_LIMIT_ANALYZE)),
 ) -> MeetingAnalysisResponse:
     """
     Endpoint to process a meeting transcript into structured meeting insights
@@ -98,14 +111,16 @@ def analyze_meeting_transcript(
 
         return insights
     except GeminiConfigError as e:
+        logger.error(f"Gemini configuration error: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except GeminiAnalysisError as e:
+        logger.error(f"Gemini analysis error: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream AI service is temporarily unavailable. Please try again."),
         )
     except ValueError as e:
         raise HTTPException(
@@ -113,9 +128,10 @@ def analyze_meeting_transcript(
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Unexpected error in analyze_meeting_transcript: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected internal error occurred: {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -142,19 +158,22 @@ def list_recent_meetings(
     try:
         return firebase_service.list_recent_meetings(limit=limit, owner_uid=current_user.uid)
     except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in list_recent_meetings: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in list_recent_meetings: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
         )
     except Exception as e:
+        logger.exception(f"Failed to retrieve meetings for user {current_user.uid}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve meetings: {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -172,7 +191,7 @@ def list_recent_meetings(
 )
 def export_meeting_pdf(
     request: MeetingPdfExportRequest,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_rate_limit("pdf_export", lambda: settings.RATE_LIMIT_PDF)),
 ) -> Response:
     """
     Endpoint to generate and stream a PDF meeting report from the provided analysis payload.
@@ -223,10 +242,10 @@ def export_meeting_pdf(
             },
         )
     except Exception as e:
-        logger.error(f"Failed to generate meeting report PDF: {e}")
+        logger.exception(f"Failed to generate meeting report PDF: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate meeting report PDF: {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -257,22 +276,25 @@ def get_meeting_details(
     except FirebaseNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
+            detail=f"Meeting with ID '{clean_id}' not found.",
         )
     except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in get_meeting_details: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in get_meeting_details: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
         )
     except Exception as e:
+        logger.exception(f"Unexpected error retrieving meeting '{clean_id}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve meeting '{clean_id}': {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -308,23 +330,25 @@ def delete_saved_meeting(
     except FirebaseNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
+            detail=f"Meeting with ID '{clean_id}' not found.",
         )
     except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in delete_saved_meeting: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in delete_saved_meeting: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
         )
     except Exception as e:
-        logger.error(f"Unexpected error deleting meeting '{clean_id}': {e}")
+        logger.exception(f"Unexpected error deleting meeting '{clean_id}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete meeting '{clean_id}': {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -342,7 +366,7 @@ def delete_saved_meeting(
 )
 def export_saved_meeting_pdf(
     meeting_id: str,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_rate_limit("pdf_export", lambda: settings.RATE_LIMIT_PDF)),
 ) -> Response:
     """
     Endpoint to retrieve a saved meeting from Firestore and generate a downloadable PDF report.
@@ -383,20 +407,21 @@ def export_saved_meeting_pdf(
     except FirebaseNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
+            detail=f"Meeting with ID '{clean_id}' not found.",
         )
     except (FirebaseConfigError, FirebaseOperationError) as e:
+        logger.error(f"Database error during PDF export for '{clean_id}': {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
         )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to export saved meeting PDF for '{clean_id}': {e}")
+        logger.exception(f"Failed to export saved meeting PDF for '{clean_id}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to export meeting PDF: {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )
 
 
@@ -413,7 +438,7 @@ def export_saved_meeting_pdf(
 )
 def submit_clarifications(
     request: MeetingClarificationRequest,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_rate_limit("clarify", lambda: settings.RATE_LIMIT_CLARIFY)),
 ) -> MeetingAnalysisResponse:
     """
     Endpoint to submit clarification answers and re-evaluate meeting analysis.
@@ -468,35 +493,39 @@ def submit_clarifications(
             except FirebaseNotFoundError as e:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=str(e),
+                    detail=f"Meeting with ID '{clean_meeting_id}' not found.",
                 )
             except (FirebaseConfigError, FirebaseOperationError) as e:
                 logger.error(f"Failed to update meeting {clean_meeting_id} in Firestore: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to update meeting in Firestore: {str(e)}",
+                    detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
                 )
 
         return updated_insights
     except HTTPException:
         raise
     except GeminiConfigError as e:
+        logger.error(f"Gemini configuration error in submit_clarifications: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except GeminiAnalysisError as e:
+        logger.error(f"Gemini analysis error in submit_clarifications: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream AI service is temporarily unavailable. Please try again."),
         )
     except ValueError as e:
+        logger.warning(f"Validation error in submit_clarifications: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Unexpected error during clarification resolution: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected internal error occurred during clarification resolution: {str(e)}",
+            detail="An internal server error occurred while processing your request. Please try again later.",
         )

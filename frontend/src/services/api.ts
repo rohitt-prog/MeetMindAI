@@ -70,6 +70,23 @@ class ApiService {
   }
 
   /**
+   * Translates common HTTP error status codes (413, 429) into clear, actionable messages.
+   */
+  private formatErrorMessage(response: Response, defaultMessage?: string): string {
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      if (retryAfter) {
+        return `Rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`;
+      }
+      return defaultMessage || 'Rate limit reached. Please wait a moment before sending more requests.';
+    }
+    if (response.status === 413) {
+      return defaultMessage || 'Request payload too large (maximum size is 1 MiB / 100,000 characters). Please reduce transcript length.';
+    }
+    return defaultMessage || `Request failed with status: ${response.status}`;
+  }
+
+  /**
    * Check backend service health status.
    * Calls GET /api/health (falls back to GET /health if needed).
    */
@@ -156,7 +173,9 @@ class ApiService {
           // If response body is not JSON, use default error message
         }
 
-        if (response.status === 503) {
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
           errorMessage = 'Gemini API key is not configured. Please add GEMINI_API_KEY to your backend/.env file.';
         } else if (response.status === 502) {
           errorMessage = `Gemini AI analysis failed: ${errorMessage}`;
@@ -230,7 +249,9 @@ class ApiService {
           // fallback
         }
 
-        if (response.status === 404) {
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 404) {
           errorMessage = 'Meeting not found or you do not have permission to update it.';
         } else if (response.status === 503) {
           errorMessage = 'Gemini API key is not configured in backend/.env.';
@@ -292,6 +313,9 @@ class ApiService {
         } catch {
           // fallback
         }
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
         throw new Error(errorMessage);
       }
 
@@ -351,6 +375,9 @@ class ApiService {
           errorMessage = `Meeting with ID '${meetingId}' not found.`;
         }
 
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
         throw new Error(errorMessage);
       }
 
@@ -413,6 +440,9 @@ class ApiService {
           errorMessage = 'Firebase Firestore is not configured on the backend.';
         }
 
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
         throw new Error(errorMessage);
       }
 
@@ -470,6 +500,9 @@ class ApiService {
           if (errorJson.detail) errorMessage = errorJson.detail;
         } catch {
           // fallback
+        }
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
         }
         throw new Error(errorMessage);
       }
@@ -541,6 +574,9 @@ class ApiService {
           errorMessage = `Meeting '${meetingId}' not found or access denied.`;
         }
 
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
         throw new Error(errorMessage);
       }
 

@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 import logging
 
 from app.core.config import settings
+from app.core.middleware import RequestSizeLimitMiddleware, SecurityHeadersMiddleware
 from app.api.router import api_router
 from app.schemas.health import HealthResponse
 from app.services.health_service import HealthService
@@ -22,8 +23,10 @@ logger = logging.getLogger("meetmind-ai")
 async def lifespan(app: FastAPI):
     """
     Application lifespan context manager for startup and shutdown procedures.
-    Safely initializes Firebase if credentials are provided.
+    Enforces production security guards and initializes Firebase if credentials are provided.
     """
+    settings.validate_production_configuration()
+
     if firebase_service.is_configured():
         try:
             firebase_service.initialize_app()
@@ -32,18 +35,24 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Firebase initialization deferred: {e}")
     yield
 
+is_production = settings.ENVIRONMENT.lower() == "production"
+
 # Initialize FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="Backend API for MeetMind AI — AI-Powered Meeting-to-Action Assistant",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
     lifespan=lifespan,
 )
 
-# Configure CORS Middleware
+# Configure Middleware Stack
+# Request flow: CORS -> SecurityHeaders -> RequestSizeLimit -> Application
+# Response flow: Application -> RequestSizeLimit -> SecurityHeaders -> CORS
+app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,

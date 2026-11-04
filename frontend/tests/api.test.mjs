@@ -38,6 +38,20 @@ class ApiServiceTestClient {
     }
   }
 
+  formatErrorMessage(response, defaultMessage) {
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      if (retryAfter) {
+        return `Rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`;
+      }
+      return defaultMessage || 'Rate limit reached. Please wait a moment before sending more requests.';
+    }
+    if (response.status === 413) {
+      return defaultMessage || 'Request payload too large (maximum size is 1 MiB / 100,000 characters). Please reduce transcript length.';
+    }
+    return defaultMessage || `Request failed with status: ${response.status}`;
+  }
+
   async getHealth() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -112,7 +126,9 @@ class ApiServiceTestClient {
           // fallback
         }
 
-        if (response.status === 503) {
+        if (response.status === 429 || response.status === 413) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
           errorMessage = 'Gemini API key is not configured. Please add GEMINI_API_KEY to your backend/.env file.';
         } else if (response.status === 502) {
           errorMessage = `Gemini AI analysis failed: ${errorMessage}`;
@@ -1089,5 +1105,34 @@ describe('Frontend API Service & State Integration Tests', () => {
 
     assert.equal(unauthorizedTriggered, true, 'onUnauthorized callback should be called on 401');
     client.setOnUnauthorized(null);
+  });
+
+  it('Meeting Analysis: handles HTTP 429 rate limit exceeded with Retry-After header', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: "Rate limit exceeded for endpoint 'analyze'." }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '45',
+        },
+      });
+
+    await assert.rejects(
+      async () => client.analyzeMeeting({ transcript: 'Test transcript' }),
+      /Rate limit exceeded\. Please wait 45 seconds before trying again\./
+    );
+  });
+
+  it('Meeting Analysis: handles HTTP 413 payload too large error', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: 'Payload Too Large: Request body size exceeds limit.' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    await assert.rejects(
+      async () => client.analyzeMeeting({ transcript: 'Large transcript...' }),
+      /Payload Too Large/
+    );
   });
 });

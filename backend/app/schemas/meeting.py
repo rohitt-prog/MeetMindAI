@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
+from app.core.config import settings
 
 class ActionItem(BaseModel):
     id: Optional[str] = Field(
@@ -68,11 +69,13 @@ class ClarificationItem(BaseModel):
 class MeetingAnalysisRequest(BaseModel):
     title: Optional[str] = Field(
         default=None,
+        max_length=200,
         description="Optional title or topic of the meeting",
         json_schema_extra={"example": "Sprint Architecture Sync"}
     )
     transcript: str = Field(
         ...,
+        max_length=settings.MAX_TRANSCRIPT_CHARS,
         description="Raw meeting transcript or conversational notes",
         json_schema_extra={"example": "Sarah: Let's finalize the API spec by Friday..."}
     )
@@ -132,11 +135,13 @@ class MeetingAnalysisResponse(BaseModel):
 class ClarificationAnswer(BaseModel):
     clarification_id: str = Field(
         ...,
+        max_length=64,
         description="The ID of the clarification being answered (e.g., clarif_1)",
         json_schema_extra={"example": "clarif_1"}
     )
     answer: str = Field(
         ...,
+        max_length=2000,
         description="The user's response providing clarification",
         json_schema_extra={"example": "David from Infrastructure will provision the staging access."}
     )
@@ -144,6 +149,7 @@ class ClarificationAnswer(BaseModel):
 class MeetingClarificationRequest(BaseModel):
     meeting_id: Optional[str] = Field(
         default=None,
+        max_length=128,
         description="Optional Firestore meeting ID to update the existing persisted record in-place",
         json_schema_extra={"example": "m_1730650000_a1b2c3d4"}
     )
@@ -154,7 +160,8 @@ class MeetingClarificationRequest(BaseModel):
     answers: List[ClarificationAnswer] = Field(
         ...,
         description="List of clarification answers submitted by the user",
-        min_length=1
+        min_length=1,
+        max_length=50
     )
 
 class MeetingListItem(BaseModel):
@@ -183,11 +190,13 @@ class MeetingDetailResponse(BaseModel):
 class MeetingPdfExportRequest(BaseModel):
     title: Optional[str] = Field(
         default=None,
+        max_length=200,
         description="Optional meeting title",
         json_schema_extra={"example": "Mobile App Redesign Sync"}
     )
     transcript: Optional[str] = Field(
         default=None,
+        max_length=settings.MAX_TRANSCRIPT_CHARS,
         description="Optional meeting transcript",
         json_schema_extra={"example": "Sarah: Let's review the blockers for the milestone release..."}
     )
