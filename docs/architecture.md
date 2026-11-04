@@ -1,61 +1,82 @@
-# MeetMind AI — System Architecture & Design Documentation
+# MeetMind AI — System Architecture & Technical Specification
 
 ## 1. System Overview
 
-**MeetMind AI** is an AI-powered meeting-to-action platform built to ingest raw, unstructured meeting transcripts and synthesize them into actionable insights, structured decisions, assigned deliverables, and clarifying questions.
+**MeetMind AI** is an enterprise-grade meeting-to-action assistant that ingests conversational meeting transcripts and synthesizes them into actionable summaries, verified decisions, task deliverables with explicit owners and deadlines, and targeted clarifying questions.
 
-The system is designed with a decoupled client-server architecture:
-- **Client Tier**: React 18, Vite, TypeScript, Tailwind CSS, Lucide React icons (Modern productivity workspace with dark/light themes, loading states, recent meetings history panel, PDF report downloaders, and clarification feedback loops).
-- **Service Tier**: Python 3.11+, FastAPI, Uvicorn, Pydantic v2.
-- **Intelligence Tier**: Google Gemini API via official SDK (`google-genai` v2.34+).
-- **Persistence Tier (Phase 6 Implemented)**: Firebase Cloud Firestore via official `firebase-admin` Python SDK for persistent meeting records, transcripts, analyses, and clarification history.
-- **Export Tier (Phase 7 Implemented)**: Server-side PDF report compilation engine via `reportlab` with in-memory binary streaming, custom two-pass canvas (`NumberedCanvas`), and auto-wrapping tables.
+The system is built on a modern, decoupled, multi-tier architecture:
+- **Presentation Tier**: React 18, Vite, TypeScript, Tailwind CSS, Framer Motion, and Lucide React icons. Features an accessible productivity dashboard with light/dark themes, interactive ambiguity feedback loops, meeting history management with deletion, PDF report downloads, and integrated Firebase Authentication with instant demo account access.
+- **Application & Service Tier**: Python 3.11+, FastAPI (ASGI via Uvicorn), and Pydantic v2. Implements modular route controllers, dependency injection, strict schema validation, defensive security headers, request body size bounding, and per-user sliding-window rate limiting.
+- **Security & Identity Tier**: Client-side Firebase Authentication (supporting Email/Password and Anonymous Demo sign-in), secure Bearer JWT transmission, and server-side cryptographic verification via the official `firebase-admin` SDK. Enforces multi-user data isolation via `owner_uid` document binding.
+- **Rate Limiting & Abuse Protection**: Tiered sliding-window rate limiter powered by an atomic Redis Lua script (with thread-safe in-memory fallback for local development). Enforces per-user quotas keyed strictly by verified Firebase UID.
+- **Intelligence Tier**: Google Gemini API via the official `google-genai` Python SDK (`gemini-2.5-flash`), with prompt-level anti-hallucination guardrails, 4-way ambiguity classification, and non-destructive merge safeguards.
+- **Persistence Tier**: Firebase Cloud Firestore via the Python `firebase-admin` SDK. Provides isolated document CRUD, historical clarification audit trails, and zero-duplicate atomic in-place updates.
+- **Export Tier**: Server-side PDF report compilation engine powered by Python's `reportlab` library with in-memory binary streaming, custom two-pass `NumberedCanvas`, and auto-wrapping tables.
 
 ---
 
-## 2. Architecture Diagram
+## 2. End-to-End System Architecture
 
 ```mermaid
-graph TD
-    subgraph Client ["Frontend (React + Vite + TypeScript)"]
-        UI["Dashboard & Meeting UI"]
+flowchart TD
+    subgraph ClientTier ["Frontend Tier (React + Vite + TypeScript)"]
+        UI["Productivity Dashboard & History Views"]
+        AuthModal["Auth Modal (Email/Password & Demo)"]
+        AuthCtx["AuthContext (Firebase Web Auth SDK)"]
         APIService["Centralized API Client (apiService)"]
-        HistoryList["RecentMeetingsList (Sidebar & History View)"]
-        ExportBtn["Export PDF Action (Workspace & Cards)"]
-        State["Connection & Meeting State"]
+        TokenManager["Token Getter & 401 Retry Handler"]
+
+        UI --> AuthModal
+        AuthModal --> AuthCtx
+        AuthCtx --> TokenManager
+        TokenManager --> APIService
         UI --> APIService
-        HistoryList --> APIService
-        ExportBtn --> APIService
-        APIService --> State
     end
 
-    subgraph Service ["Backend (FastAPI + Uvicorn)"]
-        Router["API Router (/api)"]
-        HealthRoute["GET /api/health"]
-        AnalyzeRoute["POST /api/meetings/analyze"]
-        ClarifyRoute["POST /api/meetings/clarify"]
-        ListRoute["GET /api/meetings"]
-        GetRoute["GET /api/meetings/{id}"]
-        DeleteRoute["DELETE /api/meetings/{id}"]
-        ExportPostRoute["POST /api/meetings/export/pdf"]
-        ExportGetRoute["GET /api/meetings/{id}/export/pdf"]
-        
-        HealthService["HealthService"]
-        GeminiService["GeminiService (Analysis & Clarifications)"]
-        FirebaseService["FirebaseService (Firestore Persistence)"]
-        PdfService["PdfService (ReportLab PDF Generation)"]
-        Config["Settings (Pydantic BaseSettings)"]
-        
-        Router --> HealthRoute
-        Router --> AnalyzeRoute
-        Router --> ClarifyRoute
-        Router --> ListRoute
-        Router --> GetRoute
-        Router --> DeleteRoute
-        Router --> ExportPostRoute
-        Router --> ExportGetRoute
-        
-        HealthRoute --> HealthService
+    subgraph IdentityProvider ["Cloud Identity Provider"]
+        FirebaseAuth["Firebase Authentication (Google Identity Platform)"]
+        AuthCtx -- "1. Authenticate / Issue JWT" --> FirebaseAuth
+        FirebaseAuth -- "2. Google-Signed ID Token" --> AuthCtx
+    end
+
+    subgraph ServiceTier ["Backend Service Tier (FastAPI + Python 3.11)"]
+        subgraph MiddlewareStack ["Defensive Middleware Stack"]
+            CORSMW["CORS Middleware (Configured Origins)"]
+            SecHeadersMW["Security Headers Middleware (CSP, HSTS, Sniff Guard)"]
+            SizeLimitMW["Request Size Limit Middleware (1 MiB Ceiling)"]
+
+            CORSMW --> SecHeadersMW --> SizeLimitMW
+        end
+
+        subgraph SecurityAndAuth ["Authentication & Abuse Protection"]
+            AuthDep["get_current_user (Firebase Admin SDK)"]
+            RateLimitDep["require_rate_limit (Per-User Sliding Window)"]
+            RateLimiterEngine["Rate Limiter (Atomic Redis Lua / In-Memory Fallback)"]
+
+            SizeLimitMW --> AuthDep
+            AuthDep --> RateLimitDep
+            RateLimitDep --> RateLimiterEngine
+        end
+
+        subgraph Controllers ["API Route Controllers (/api)"]
+            HealthRoutes["GET /api/health & GET /health"]
+            AnalyzeRoute["POST /api/meetings/analyze"]
+            ClarifyRoute["POST /api/meetings/clarify"]
+            ListRoute["GET /api/meetings"]
+            GetRoute["GET /api/meetings/{id}"]
+            DeleteRoute["DELETE /api/meetings/{id}"]
+            ExportPostRoute["POST /api/meetings/export/pdf"]
+            ExportGetRoute["GET /api/meetings/{id}/export/pdf"]
+        end
+
+        subgraph CoreServices ["Application Core Services"]
+            GeminiService["GeminiService (Prompt & Parsing Engine)"]
+            FirebaseService["FirebaseService (Firestore Data Access Object)"]
+            PdfService["PdfService (ReportLab Flowable Compiler)"]
+            HealthService["HealthService (Status & Metadata Probe)"]
+        end
+
+        RateLimitDep --> Controllers
         AnalyzeRoute --> GeminiService
         AnalyzeRoute --> FirebaseService
         ClarifyRoute --> GeminiService
@@ -66,141 +87,125 @@ graph TD
         ExportPostRoute --> PdfService
         ExportGetRoute --> FirebaseService
         ExportGetRoute --> PdfService
-        
-        GeminiService --> Config
-        FirebaseService --> Config
+        HealthRoutes --> HealthService
     end
 
-    subgraph AI ["Intelligence Tier (Phase 2 & 3)"]
-        GeminiSDK["Google Gemini API (google-genai)"]
-        GeminiFlash["Gemini 2.5 Flash / Selected Model"]
-        GeminiSDK --> GeminiFlash
+    subgraph ExternalServices ["External Cloud Services"]
+        GeminiAPI["Google Gemini 2.5 Flash API (google-genai)"]
+        FirestoreDB[("Firebase Cloud Firestore ('meetings' Collection)")]
+        RedisServer[("Redis Server (Sliding Window Store)")]
     end
 
-    subgraph Database ["Persistence Tier (Phase 6)"]
-        Firestore[("Firebase Cloud Firestore ('meetings' collection)")]
-    end
-
-    subgraph PDFEngine ["Export Tier (Phase 7)"]
-        ReportLab["ReportLab PDF Engine (In-Memory BytesIO)"]
-        PdfService --> ReportLab
-    end
-
-    APIService -- "REST / JSON & PDF Blobs" --> Router
-    GeminiService -- "SDK / Structured Outputs" --> GeminiSDK
-    FirebaseService -- "firebase-admin SDK" --> Firestore
+    APIService -- "3. HTTPS Requests + Bearer ID Token" --> MiddlewareStack
+    AuthDep -- "4. Verify Public Key & Signature" --> FirebaseAuth
+    RateLimiterEngine -- "Atomic Lua Quota Check" --> RedisServer
+    GeminiService -- "SDK Structured Calls" --> GeminiAPI
+    FirebaseService -- "Isolated Queries (owner_uid == UID)" --> FirestoreDB
 ```
 
 ---
 
-## 3. Communication Protocols & API Matrix
+## 3. Authentication & Session Lifecycle
 
-| Route | Method | Purpose | Implementation Phase |
-| :--- | :--- | :--- | :--- |
-| `/health` | `GET` | Root health check & availability probe | **Phase 5 (Implemented)** |
-| `/api/health` | `GET` | API health check & application metadata | **Phase 1 & 5 (Implemented)** |
-| `/api/meetings/analyze` | `POST` | Transcript parsing, ambiguity detection, & Firestore persistence | **Phase 2, 3, 5, 6 (Implemented)** |
-| `/api/meetings/clarify` | `POST` | Re-evaluation with clarification answers & in-place Firestore update | **Phase 3, 4, 5, 6 (Implemented)** |
-| `/api/meetings` | `GET` | Retrieve list of recent saved meetings from Firestore (with `limit` param) | **Phase 6 (Implemented)** |
-| `/api/meetings/{id}` | `GET` | Retrieve full meeting transcript, analysis, and answers history | **Phase 6 (Implemented)** |
-| `/api/meetings/{id}` | `DELETE` | Permanently delete saved meeting document from Firestore | **Phase 9 (Implemented)** |
-| `/api/meetings/export/pdf` | `POST` | Stream downloadable PDF report compiled from active/unsaved analysis | **Phase 7 (Implemented)** |
-| `/api/meetings/{id}/export/pdf` | `GET` | Stream downloadable PDF report compiled from saved Firestore record | **Phase 7 (Implemented)** |
-
----
-
-## 4. Ambiguity Detection & Clarification Workflow (Phase 3 & 4)
-
-### 4.1 Sequence Flow
+MeetMind AI uses an enterprise token-based authentication model combining client-side Firebase Web SDK with backend cryptographic verification.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant Frontend as Frontend / Client
-    participant API as FastAPI Backend (/api/meetings)
-    participant Gemini as GeminiService
-    participant Firestore as FirebaseService
-    participant LLM as Google Gemini API
-    participant DB as Cloud Firestore
+    participant UI as React UI (AuthModal)
+    participant AuthContext as AuthContext
+    participant FirebaseClient as Firebase Web Auth
+    participant APIClient as apiService
+    participant Backend as FastAPI (get_current_user)
+    participant AdminSDK as Firebase Admin SDK
+    participant Firestore as Cloud Firestore
 
-    User->>Frontend: Submit meeting transcript
-    Frontend->>API: POST /api/meetings/analyze
-    API->>Gemini: analyze_transcript(transcript, title)
-    Gemini->>LLM: generate_content(prompt, response_schema=MeetingAnalysisResponse)
-    LLM-->>Gemini: Structured JSON with ambiguities & questions
-    Gemini-->>API: MeetingAnalysisResponse (with clarifications list)
-    opt When Firestore Configured
-        API->>Firestore: save_meeting(transcript, analysis, title)
-        Firestore->>DB: doc_ref.set(meeting_doc)
-        DB-->>Firestore: OK (meeting_id)
-        Firestore-->>API: meeting_id
+    alt Standard Email/Password Sign-In
+        User->>UI: Enter Email & Password
+        UI->>AuthContext: login(email, password)
+        AuthContext->>FirebaseClient: signInWithEmailAndPassword()
+        FirebaseClient-->>AuthContext: UserCredential (uid, email)
+    else Instant Demo Account Access
+        User->>UI: Click "Explore Demo Account"
+        UI->>AuthContext: loginDemo()
+        AuthContext->>FirebaseClient: signInAnonymously() [or dedicated demo credentials]
+        FirebaseClient-->>AuthContext: UserCredential (uid, isAnonymous=true)
     end
-    API-->>Frontend: 200 OK (meeting_id + Action items + Unresolved clarifications)
+
+    AuthContext->>AuthContext: Update user state (displayName="Demo User" for demo)
     
-    User->>Frontend: Review ambiguities & supply answers
-    Frontend->>API: POST /api/meetings/clarify (meeting_id + analysis + answers)
-    API->>Gemini: resolve_clarifications(analysis, answers)
-    Gemini->>LLM: generate_content(update prompt, response_schema=MeetingAnalysisResponse)
-    LLM-->>Gemini: Refined JSON (action items updated, resolved=true)
-    Gemini-->>API: Updated MeetingAnalysisResponse
-    opt When meeting_id Provided & Firestore Configured
-        API->>Firestore: update_meeting_clarification(meeting_id, analysis, answers)
-        Firestore->>DB: doc_ref.update(...)
-        DB-->>Firestore: OK
+    User->>UI: Load Dashboard / List Meetings
+    UI->>APIClient: listMeetings()
+    APIClient->>AuthContext: getFirebaseIdToken()
+    AuthContext->>FirebaseClient: authStateReady() -> currentUser.getIdToken()
+    FirebaseClient-->>AuthContext: Google-Signed ID Token (JWT)
+    APIClient->>Backend: GET /api/meetings (Header: Authorization: Bearer <JWT>)
+
+    Backend->>AdminSDK: auth.verify_id_token(token, check_revoked=False)
+    AdminSDK-->>Backend: Decoded Claims (uid, email, etc.)
+    Backend->>Backend: Inject AuthenticatedUser(uid=...) into route
+    Backend->>Firestore: query.where(owner_uid == uid).stream()
+    Firestore-->>Backend: User's Meeting Documents
+    Backend-->>APIClient: 200 OK (Meeting List)
+    APIClient-->>UI: Render Meeting Cards
+
+    opt 401 Session Refresh & Transparent Retry
+        Note over APIClient,Backend: When ID Token expires in transit (1-hour window)
+        APIClient->>Backend: Request with expired token
+        Backend-->>APIClient: 401 Unauthorized
+        APIClient->>AuthContext: getFirebaseIdToken(forceRefresh=true)
+        AuthContext->>FirebaseClient: currentUser.getIdToken(forceRefresh=true)
+        FirebaseClient-->>AuthContext: Fresh ID Token
+        APIClient->>Backend: Retry request with fresh Bearer Token
+        Backend-->>APIClient: 200 OK
     end
-    API-->>Frontend: 200 OK (Updated analysis & clear status)
+
+    opt Logout / Expiration
+        User->>UI: Click Logout (or permanent auth failure)
+        UI->>AuthContext: logout()
+        AuthContext->>FirebaseClient: signOut(auth)
+        AuthContext->>AuthContext: Clear session storage & reset user=null
+        AuthContext-->>UI: Display AuthModal
+    end
 ```
 
-### 4.2 Ambiguity Taxonomies
-1. **Ownership (`ownership`)**: Statements lacking an assigned owner (e.g., *"Someone should send the report"*). Action item owner remains `null` until confirmed.
-2. **Deadline (`deadline`)**: Statements with vague or ambiguous dates (e.g., *"Finish this by Friday"*). Deadline remains `null` until clarified.
-3. **Task Scope (`task_scope`)**: Statements where the deliverable or responsibility is ambiguous (e.g., *"Alex will handle it"*).
-4. **Decision vs. Suggestion (`decision_vs_suggestion`)**: Brainstorming proposals or ideas (e.g., *"We should consider launching next month"*) are strictly excluded from confirmed `decisions` unless validated.
-5. **Missing Context (`missing_context`)**: Statements that lack necessary prerequisites or contextual background.
-
-### 4.3 Safe Non-Destructive Updates & Drop Prevention
-- **Automatic Merge Safeguard**: If an LLM response during clarification omits unrelated action items, decisions, or discussion points from the original analysis, the backend post-processor automatically detects the omission and preserves the original items.
-- **Clarification Preservation**: Any unaddressed clarification from the original analysis is retained in its `resolved: false` state if omitted by the model.
-- **Ambiguity Continuity**: When an answer is vague or uncertain (e.g., *"Still undecided"*), the ambiguity is preserved with `resolved: false`.
-- **Status Coherence**: Only when all clarifications have `resolved: true` does `clarification_required` flip to `false` and `clarification_question` reset to `null`.
-- **Batch Processing**: The endpoint supports multiple clarification answers in a single request, allowing the client to resolve multiple ambiguities simultaneously.
+### 3.1 Authentication Features & Guarantees
+1. **Zero Client Trust**: The backend never accepts client-provided user IDs. The caller's `uid` is extracted strictly from cryptographically verified tokens.
+2. **Session Persistence**: Firebase handles session caching in IndexedDB. `getFirebaseIdToken()` awaits `auth.authStateReady()` before token resolution, preventing false unauthenticated states during browser reloads.
+3. **Transparent 401 Retry**: `apiService.fetchWithAuth()` catches `401 Unauthorized` responses and attempts a single token refresh with `forceRefresh=true`. If the refreshed token succeeds, the request completes seamlessly without interrupting user workflow.
+4. **Instant Demo Access**: The "Explore Demo Account" button authenticates via `signInAnonymously(auth)` (or dedicated environment credentials), issuing a genuine Firebase token. This ensures demo sessions are fully verified by the backend without opening security backdoors.
+5. **Session Expiration Safety**: If a session cannot be refreshed, the client triggers `onUnauthorized()`, cleans up local session storage, revokes state, and displays an actionable login modal.
 
 ---
 
-## 5. Persistence Tier Architecture: Firebase Cloud Firestore (Phase 6)
+## 4. Multi-User Ownership & Data Isolation
 
-### 5.1 Technology Choice & Rationale
-Cloud Firestore was selected for MeetMind AI persistence:
-- **Serverless & Scalable**: Native document database with zero database administration overhead.
-- **Document Flexibility**: Cleanly stores nested meeting analyses, action item collections, and clarification audit histories.
-- **Python Admin SDK**: First-class integration via `firebase-admin>=6.5.0` with secure service account credentials or Application Default Credentials (ADC).
-- **Developer Experience**: Intuitive Firebase Console to view, query, and inspect persisted collections.
+### 4.1 Firestore Document Schema
 
-### 5.2 Firestore Document Data Schema
-
-Each document in the `meetings` collection follows this schema:
+Meeting documents in the `meetings` collection follow this schema:
 
 ```json
 {
-  "meeting_id": "meet_a1b2c3d4e5f6",
-  "title": "Mobile App Redesign Sync",
-  "transcript": "Sarah: Let us review the blockers...",
-  "created_at": "2026-11-03T18:00:00.000Z",
-  "updated_at": "2026-11-03T18:15:30.000Z",
+  "meeting_id": "m_1730650000_a1b2c3d4",
+  "owner_uid": "firebase_user_uid_12345",
+  "title": "Quarterly Product Strategy",
+  "transcript": "Sarah: Let's review the roadmap blockers...",
+  "created_at": "2026-11-04T10:00:00.000Z",
+  "updated_at": "2026-11-04T10:15:30.000Z",
   "analysis": {
-    "summary": "The team aligned on the mobile app redesign milestones...",
+    "summary": "The team aligned on the product strategy roadmap...",
     "discussion_points": [
-      "Figma design system token handoff from David",
-      "GraphQL schema updates for user preferences"
+      "Frontend performance benchmarks",
+      "Authentication migration timeline"
     ],
     "decisions": [
-      "Alex will finalize GraphQL endpoints by Wednesday at 4 PM"
+      "Alex will finalize API schema by Wednesday 4 PM"
     ],
     "action_items": [
       {
         "id": "action_1",
-        "task": "Confirm and finalize GraphQL schema changes",
+        "task": "Finalize API schema updates",
         "owner": "Alex",
         "deadline": "Wednesday 4 PM",
         "status": "pending"
@@ -208,94 +213,175 @@ Each document in the `meetings` collection follows this schema:
     ],
     "clarification_required": false,
     "clarification_question": null,
-    "clarifications": [
-      {
-        "id": "clarif_1",
-        "category": "ownership",
-        "original_statement": "Someone should provision them by tomorrow morning.",
-        "explanation": "No specific individual or team was assigned.",
-        "question": "Who is specifically responsible for provisioning credentials?",
-        "related_action_item_id": "action_2",
-        "resolved": true
-      }
-    ],
-    "meeting_id": "meet_a1b2c3d4e5f6"
+    "clarifications": [],
+    "open_follow_ups": [],
+    "meeting_id": "m_1730650000_a1b2c3d4"
   },
   "answers_history": [
     {
       "clarification_id": "clarif_1",
-      "answer": "David from DevOps will provision the credentials by tomorrow 10 AM.",
-      "timestamp": "2026-11-03T18:15:30.000Z"
+      "answer": "David will provision staging credentials by tomorrow 10 AM.",
+      "timestamp": "2026-11-04T10:15:30.000Z"
     }
   ]
 }
 ```
 
-### 5.3 In-Place Update Lifecycle
-1. **Initial Analysis**: `POST /api/meetings/analyze` parses the transcript and calls `FirebaseService.save_meeting()`, generating a unique `meeting_id` (`meet_<hex>`) and setting initial `created_at` and `updated_at` timestamps.
-2. **Clarification Update**: When the user answers clarifications, the client passes `meeting_id` to `POST /api/meetings/clarify`. `FirebaseService.update_meeting_clarification()` executes an in-place update using Firestore's atomic `doc_ref.update(...)`:
-   - Updates `analysis` with the resolved items and status.
-   - Sets `updated_at` to the current UTC timestamp.
-   - Appends submitted answers to `answers_history`.
-   - **Zero Duplication**: No duplicate documents are created.
-3. **Restoring Previous Meetings**: When clicking any meeting from the Sidebar or History view, `GET /api/meetings/{meeting_id}` retrieves the complete stored document. The frontend restores the original transcript, title, structured results, and active clarification status.
+### 4.2 Ownership Enforcement Rules
+- **Creation (`POST /api/meetings/analyze`)**: The meeting document is persisted with `owner_uid: current_user.uid`.
+- **Listing (`GET /api/meetings`)**: Queries Firestore strictly filtered by `FieldFilter("owner_uid", "==", current_user.uid)`. Results are sorted in memory by `updated_at DESC` to avoid composite index requirements in Firestore.
+- **Access Verification (`GET /api/meetings/{id}`)**: Checks `doc.owner_uid == current_user.uid`. If the document belongs to another user (or is an unowned legacy record), the API raises `HTTP 404 Not Found`. This prevents ID enumeration and existence disclosure.
+- **Clarification Updates (`POST /api/meetings/clarify`)**: In-place updates via `update_meeting_clarification` require `doc.owner_uid == current_user.uid`.
+- **Deletion (`DELETE /api/meetings/{id}`)**: Deletes the document only if `doc.owner_uid == current_user.uid`. Returns 404 for unauthorized attempts.
+- **PDF Export (`GET /api/meetings/{id}/export/pdf`)**: Validates ownership before compiling and streaming the PDF report.
+
+### 4.3 Legacy Record Quarantine & Migration
+Records created prior to multi-user authentication lack an `owner_uid`.
+- **Quarantine Policy**: Legacy records are strictly inaccessible to regular users and return 404.
+- **Migration CLI Tool**: An administrative script (`backend/scripts/migrate_legacy_meetings.py`) supports read-only audits (`--list`), dry-run simulations (`--dry-run`), and non-destructive batch assignments (`--assign <UID>`).
 
 ---
 
-## 6. PDF Meeting Report Generation Tier (Phase 7)
+## 5. Security Architecture & Abuse Protection
 
-### 6.1 ReportLab Architecture & Flowables
-The PDF generation engine is powered by Python's `reportlab` library:
-- **In-Memory Streaming**: PDFs are generated entirely within `io.BytesIO` buffers, avoiding temporary disk I/O, race conditions, or unmanaged server storage.
-- **Two-Pass `NumberedCanvas`**: Dynamically calculates the total page count on the first pass and paints "Page X of Y" along with running headers and footers on the second pass.
-- **Flowable Hierarchy**:
-  1. **Header & Metadata Grid**: Logo badge, meeting title, generated date, meeting ID, and ambiguity status pill.
-  2. **Executive Summary Callout**: Highlighted card with Indigo accent bar.
-  3. **Discussion Points & Decisions**: Bulleted list with green checkmarks for decisions.
-  4. **Action Items Table**: Slate 800 header, alternate row background shading, automatic paragraph cell wrapping (Task: 242pt, Owner: 95pt, Deadline: 110pt, Status: 85pt = 532pt printable width).
-  5. **Ambiguity Audit Log**: Individual cards per ambiguity with category badges, transcript quotes, clarification questions, and resolutions.
-  6. **Original Transcript Section**: Formatted as sequential flowable rows so multi-page transcripts split across page breaks without overflow errors.
+```
+Incoming Request
+       │
+       ▼
+┌─────────────────────────────────┐
+│  RequestSizeLimitMiddleware     │  Rejects payloads > 1 MiB (HTTP 413)
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  SecurityHeadersMiddleware      │  Applies CSP, X-Frame-Options, X-Content-Type-Options
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  CORSMiddleware                 │  Validates origin against settings.CORS_ORIGINS
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  get_current_user Dependency    │  Verifies Bearer JWT signature via Firebase Admin SDK
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  require_rate_limit Dependency  │  Enforces sliding-window quota keyed by verified UID
+│  (Atomic Redis Lua Limiter)     │  Returns HTTP 429 + Retry-After if quota exceeded
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  Pydantic Schema Validation     │  Bounds transcript length (<= 100k chars), title (<= 200)
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│  Route Controller Handler       │  Executes business logic with ownership isolation
+└─────────────────────────────────┘
+```
 
-### 6.2 Safe Filename Sanitization
-`PdfService.sanitize_filename()` transforms arbitrary meeting titles into safe HTTP attachment names:
-- Filters non-alphanumeric characters, converts whitespace to underscores.
-- Truncates base slugs to 45 characters.
-- Falls back to `meetmind_{meeting_id}.pdf` or `meetmind_meeting_report.pdf`.
+### 5.1 Defense-in-Depth Measures
+1. **Request Body Size Limits**:
+   - `RequestSizeLimitMiddleware` checks the `Content-Length` header and meters chunked/streamed bodies against `MAX_REQUEST_BODY_BYTES` (1 MiB / 1,048,576 bytes). Returns `HTTP 413 Payload Too Large`.
+2. **Input Character Bounds**:
+   - `MeetingAnalysisRequest` limits transcripts to `MAX_TRANSCRIPT_CHARS` (100,000 characters) and titles to 200 characters.
+   - `ClarificationAnswer` limits answer strings to 2,000 characters.
+   - Meeting IDs are validated against strict alphanumeric character sets (`isalnum` + `_` + `-`).
+3. **Defensive HTTP Headers**:
+   - `X-Content-Type-Options: nosniff`
+   - `X-Frame-Options: DENY`
+   - `Referrer-Policy: strict-origin-when-cross-origin`
+   - `Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; frame-ancestors 'none';`
+4. **Per-User Sliding-Window Rate Limiting**:
+   - Keyed strictly by verified Firebase UID (`{endpoint}:{uid}`).
+   - Powered by an atomic Redis Lua script (`ZREMRANGEBYSCORE`, `ZCARD`, `ZRANGE`, `ZADD`, `EXPIRE`) eliminating race conditions across multi-instance backend clusters.
+   - Quotas: `analyze` (10/min), `clarify` (10/min), `export/pdf` (20/min).
+   - Redis connection strings are sanitized (`sanitize_redis_url`) to prevent leaking passwords or tokens into logs.
+   - Returns standard headers: `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
+5. **Fail-Closed Configuration Consistency**:
+   - In production (`ENVIRONMENT=production`), `validate_production_configuration()` enforces that `RATE_LIMIT_REDIS_URL` is set, prohibiting silent fallback to in-memory limiters.
+   - Redis failures fail closed in production to protect billable downstream AI services.
+   - Local development safely falls back to `InMemoryRateLimiter` when Redis is absent.
+6. **Information Disclosure Prevention**:
+   - In production, Swagger UI and OpenAPI schemas are disabled (`docs_url=None`, `redoc_url=None`, `openapi_url=None`).
+   - Wildcard CORS (`*`) with credentials is strictly prohibited.
+   - `safe_error_message()` masks internal stack traces and database details for 500/502/503 errors.
 
 ---
 
-## 7. Frontend UI Architecture & State Management
+## 6. REST API Matrix
 
-### 7.1 Component Hierarchy
-- `App.tsx`: Central state hub managing active meeting, recent meetings list, theme preference (`localStorage`), health heartbeat polling, and data fetching.
-  - `Sidebar.tsx`: Navigation items (`Workspace`, `History`), production release badge ("v1.0 Ready"), compact recent meetings list, and theme switcher.
-  - `Header.tsx`: Breadcrumb navigation, live backend status pill, and "New Meeting" reset button.
-  - `Dashboard.tsx`: Primary view coordinating workspace input, recent meetings history view, loading states, and analysis displays.
-    - `RecentMeetingsList.tsx`: Reusable meeting history component with compact mode (for sidebar), card grid mode (for dashboard), and quick-download PDF buttons.
-    - `TranscriptWorkspace.tsx`: Multi-line transcript input, title field, live word/character counters, sample transcript loader, and validation.
-    - `AnalysisLoadingState.tsx`: Animated multi-step progress indicators for analysis and clarification re-evaluation.
-    - `AnalysisResults.tsx`: Executive summary, meeting ID badge, collapsible transcript view, discussion points, confirmed decisions, action items, embedded clarifications, and "Export PDF" action.
-      - `ClarificationSection.tsx`: Ambiguity feedback loop with category badges, input fields, resolve triggers, and error banners.
-    - `StatsCard.tsx`: Metric indicators (discussion points, decisions, actions, ambiguities).
-
----
-
-## 8. Security & Configuration Best Practices
-
-1. **Environment Segregation**: Secrets and environment-specific parameters are managed via `.env` files; `.env.example` templates define required schema without exposing credentials.
-2. **Firebase Credential Security**:
-   - Service account keys (`*serviceAccountKey*.json`, `*firebase*.json`, `service-account*.json`) are explicitly excluded in `.gitignore`.
-   - Supports file path reference (`FIREBASE_CREDENTIALS_PATH`), raw JSON string (`FIREBASE_CREDENTIALS_JSON`), or GCP Application Default Credentials (ADC).
-   - Backend gracefully returns `503 Service Unavailable` if Firestore is requested while unconfigured.
-3. **CORS Governance**: FastAPI `CORSMiddleware` restricts browser origins to approved client ports (`localhost:5173`, `localhost:3000`).
-4. **No Frontend Secrets**: The frontend only communicates with the backend API. All Gemini API keys and Firebase credentials remain strictly within the backend service tier.
-5. **Safe Mocking in Automated Tests**: All unit and integration test suites run with mocked Firestore and Gemini clients, requiring zero live cloud credentials to achieve 100% test pass rates in CI/CD environments (38 backend tests, 16 frontend unit tests).
-6. **In-Memory PDF Generation**: PDF reports are streamed as byte arrays directly in HTTP responses with appropriate `Content-Disposition` headers; no documents or user data are stored in temporary server directories.
+| Route | Method | Authentication | Rate Limit | Payload Bounds | Description |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| `/health` | `GET` | Unauthenticated | None | None | Root operational probe returning service status. |
+| `/api/health` | `GET` | Unauthenticated | None | None | API health status probe and application metadata. |
+| `/api/meetings/analyze` | `POST` | Bearer Token Required | 10 / min | $\le$ 1 MiB body, $\le$ 100k char transcript | Synthesizes transcript into structured insights and persists to Firestore with `owner_uid`. |
+| `/api/meetings/clarify` | `POST` | Bearer Token Required | 10 / min | $\le$ 1 MiB body, $\le$ 2k char answers | Re-evaluates analysis with clarification answers and updates Firestore in-place. |
+| `/api/meetings` | `GET` | Bearer Token Required | None | `limit` query param (1–100) | Retrieves recent meetings owned by caller, sorted by `updated_at DESC`. |
+| `/api/meetings/{id}` | `GET` | Bearer Token Required | None | Alphanumeric ID | Retrieves full meeting transcript, analysis, and revision history. Returns 404 if not owned. |
+| `/api/meetings/{id}` | `DELETE` | Bearer Token Required | None | Alphanumeric ID | Permanently removes meeting document. Returns 404 if not owned. |
+| `/api/meetings/export/pdf` | `POST` | Bearer Token Required | 20 / min | $\le$ 1 MiB body | Compiles unsaved/active meeting analysis into a streamed PDF report. |
+| `/api/meetings/{id}/export/pdf` | `GET` | Bearer Token Required | 20 / min | Alphanumeric ID | Fetches saved meeting and compiles into a streamed PDF report. Returns 404 if not owned. |
 
 ---
 
-## 9. Quality Assurance & Viva Readiness (Phase 8)
+## 7. Ambiguity Resolution & Guardrails
 
-- **Backend Validation**: 38 automated Pytest test cases covering REST endpoints, anti-hallucination extraction, ambiguity detection, clarification persistence, Firestore lifecycle, and PDF compilation.
-- **Frontend Validation**: 16 Node.js unit tests (`node:test`) covering state synchronization, API client contracts, PDF triggers, and clarification management. Clean TypeScript compilation with zero type errors.
-- **Viva Preparation Guide**: Comprehensive technical Q&A, elevator pitch, architecture justifications, and demonstration script documented in [VIVA_PREPARATION.md](file:///Users/vishalkumar/Library/CloudStorage/GoogleDrive-rohitmpk200416@gmail.com/My%20Drive/AgenticAI%20P1/docs/VIVA_PREPARATION.md).
+### 7.1 Four-Way Classification Strategy
+1. **Needs Clarification**: Action items missing essential details (e.g., unassigned owner, unspecified deadline). Generates targeted questions.
+2. **Open Follow-up / Deferred**: Tasks explicitly postponed during the meeting (e.g., *"Let's decide on the vendor next week"*). Tagged as `deferred` and listed under open follow-ups **without generating unnecessary clarification questions**.
+3. **Resolved**: Questions that have been answered through user clarification submissions.
+4. **No Outstanding Issues**: Fully specified action items with verified assignees and timelines.
+
+### 7.2 Non-Destructive Merge Guardrail
+When re-evaluating meeting insights via `POST /api/meetings/clarify`:
+- If the LLM omits unrelated action items, decisions, or discussion points from the original analysis, `GeminiService.resolve_clarifications()` detects the omission by ID comparison and merges them back into the response.
+- Unaddressed clarifications retain `resolved: false`.
+- If an answer is vague (e.g., *"Not decided yet"*), `resolved` remains `false` and `clarification_required` remains `true`.
+
+---
+
+## 8. PDF Generation Engine
+
+The export engine utilizes Python's `reportlab` library:
+- **In-Memory Streaming**: Compiled within an `io.BytesIO` buffer; no temporary files on disk.
+- **Two-Pass `NumberedCanvas`**: Calculates total pages dynamically, rendering `"Page X of Y"` and running headers on pages > 1.
+- **Flowable Architecture**:
+  1. *Header & Metadata Grid*: Logo badge, title, meeting ID, generated timestamp, ambiguity status pill.
+  2. *Executive Summary*: Highlighted callout card with Indigo accent bar.
+  3. *Discussion Topics & Decisions*: Bulleted topics with verified decision checkmarks.
+  4. *Action Items Table*: Slate 800 header, alternate row background shading, automatic paragraph cell wrapping.
+  5. *Ambiguity Audit Log*: Category badges, transcript quotes, clarification questions, and resolutions.
+  6. *Source Meeting Transcript*: Sequentially formatted rows that split cleanly across page boundaries.
+- **Filename Sanitization**: Converts titles to safe attachment slugs (`meetmind_{slug}.pdf`), truncating base names to 45 characters and stripping special characters.
+
+---
+
+## 9. Frontend Architecture & State Management
+
+### 9.1 Component Structure
+- `App.tsx`: Central coordinator managing active analysis state, health heartbeat, theme preference (`localStorage`), and layout.
+  - `AuthProvider` (`frontend/src/context/AuthContext.tsx`): Manages authentication state, token retrieval, demo login, session expiration, and sign-out.
+  - `AuthModal.tsx`: Accessible authentication dialog supporting email/password sign-in/registration and instant demo access.
+  - `Header.tsx`: Breadcrumb navigation, live backend status indicator, user account card with demo badge, and sign-out action.
+  - `Sidebar.tsx`: Navigation tabs (`Workspace`, `History`), compact recent meetings list, and theme toggle.
+  - `Dashboard.tsx`: Primary view switching between workspace input, loading states, analysis results, and history view.
+    - `TranscriptWorkspace.tsx`: Multi-line transcript input, title field, live word/character counters, and sample loaders.
+    - `AnalysisLoadingState.tsx`: Animated multi-step progress indicator.
+    - `AnalysisResults.tsx`: Summary, discussion points, confirmed decisions, action item table, clarification cards, open follow-ups, and PDF export trigger.
+    - `RecentMeetingsList.tsx`: History list (compact and grid modes) with reopen, quick PDF download, and delete actions.
+    - `DeleteMeetingModal.tsx`: Accessible confirmation modal with keyboard escape and loading states.
+- `apiService` (`frontend/src/services/api.ts`): Centralized Fetch client with AbortController timeouts, Bearer token injection, single 401 token refresh retry, and binary Blob handlers.
+
+---
+
+## 10. Quality Assurance & Verification
+
+The system is validated through automated test suites requiring zero live credentials:
+- **Backend Test Suite (Pytest)**: 99 automated tests (98 passed, 1 skipped when external Redis is not running locally).
+  - `test_auth.py` (10 tests): Bearer token verification, missing/expired token rejection, user isolation across read/update/delete/export, legacy quarantine, and migration tool.
+  - `test_security_hardening.py` (36 tests): Rate limiter sliding-window mechanics, Redis Lua atomicity, fail-closed production semantics, URL sanitization, 1 MiB body ceiling, 100k char bounds, security headers, and production config verification.
+  - `test_meetings.py` (25 tests): Gemini extraction, ambiguity detection, clarification merging, drop-prevention safeguards, and anti-hallucination regression cases.
+  - `test_firebase.py` (13 tests): Firestore CRUD, persistence, in-place updates, deletion, and unconfigured service degradation.
+  - `test_pdf_export.py` (11 tests): ReportLab compiling, multi-page layout, filename sanitization, and saved report exports.
+  - `test_health.py` (4 tests): Health probes and CORS headers.
+- **Frontend Test Suite (`node:test`)**: 32 unit tests verifying health checks, API error handling, PDF streaming, Bearer token injection, session refresh on 401, demo authentication flow, rate limit handling, and payload bounds.
+- **Static Analysis & Type Safety**: Clean TypeScript compilation (`tsc -b`), zero build errors via Vite, and zero Git whitespace anomalies (`git diff --check`).
