@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import {
   User,
-  onAuthStateChanged,
+  onIdTokenChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInAnonymously,
   signOut,
 } from 'firebase/auth';
 import { auth, isFirebaseClientConfigured } from '../config/firebase';
@@ -26,7 +27,7 @@ interface AuthContextType {
   loginDemo: (email?: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
-  getIdToken: () => Promise<string | null>;
+  getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -49,10 +50,60 @@ const formatAuthError = (code: string, fallbackMessage: string): string => {
       return 'Network connection failed. Please check your internet connection.';
     case 'auth/too-many-requests':
       return 'Too many unsuccessful attempts. Access is temporarily restricted. Please try again later.';
+    case 'auth/operation-not-allowed':
+    case 'auth/admin-restricted-operation':
+      return 'Demo sign-in requires enabling "Anonymous" in Firebase Console (Authentication -> Sign-in method), or configuring VITE_FIREBASE_DEMO_EMAIL and VITE_FIREBASE_DEMO_PASSWORD in frontend/.env.';
     default:
       return fallbackMessage || 'Authentication operation failed.';
   }
 };
+
+/**
+ * Resolves the current Firebase ID token directly from auth.currentUser or demo session.
+ * - If Firebase client is configured, waits for auth.authStateReady() to ensure persistent session is restored.
+ * - Extracts token from auth.currentUser with supported forceRefresh parameter.
+ * - Does not close over stale React state variables.
+ */
+export const getFirebaseIdToken = async (forceRefresh: boolean = false): Promise<string | null> => {
+  if (isFirebaseClientConfigured()) {
+    if (typeof auth.authStateReady === 'function') {
+      try {
+        await auth.authStateReady();
+      } catch (err) {
+        console.warn('Error awaiting Firebase authStateReady:', err);
+      }
+    }
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        return await currentUser.getIdToken(forceRefresh);
+      } catch (err) {
+        console.error('Failed to retrieve Firebase ID token:', err);
+        return null;
+      }
+    }
+
+    // When Firebase client is configured, never emit fake demo tokens
+    return null;
+  }
+
+  // Fallback to active demo session only when client Firebase is completely unconfigured
+  const savedDemo = sessionStorage.getItem('meetmind_demo_user');
+  if (savedDemo) {
+    try {
+      const parsed = JSON.parse(savedDemo);
+      return parsed.uid ? `demo_token_${parsed.uid}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+};
+
+// Register stable token getter with apiService immediately on module load
+apiService.setAuthTokenGetter(getFirebaseIdToken);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -61,38 +112,39 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const isConfigured = isFirebaseClientConfigured();
 
   // Helper to extract token from real Firebase user or demo session
-  const getIdToken = useCallback(async (): Promise<string | null> => {
-    if (!user) return null;
-    if (user.isDemoUser) {
-      // In demo mode without Firebase client API key, return a mock demo token
-      return `demo_token_${user.uid}`;
-    }
-    const currentUser = auth.currentUser;
-    if (currentUser) {
-      try {
-        return await currentUser.getIdToken();
-      } catch (err) {
-        console.error('Failed to retrieve Firebase ID token:', err);
-        return null;
-      }
-    }
-    return null;
-  }, [user]);
+  const getIdToken = useCallback(async (forceRefresh?: boolean): Promise<string | null> => {
+    return getFirebaseIdToken(forceRefresh);
+  }, []);
 
-  // Sync token getter with apiService
+  // Ensure token getter is synced with apiService
   useEffect(() => {
-    apiService.setAuthTokenGetter(getIdToken);
-  }, [getIdToken]);
+    apiService.setAuthTokenGetter(getFirebaseIdToken);
+  }, []);
 
   // Hook into 401 unauthorized handling from apiService
   useEffect(() => {
-    apiService.setOnUnauthorized(() => {
-      setAuthError('Your session has expired. Please sign in again.');
-      setUser(null);
-    });
-  }, []);
+    apiService.setOnUnauthorized(async () => {
+      // Only sign out if there was an active user session to avoid false triggers on startup
+      const hasFirebaseUser = Boolean(auth.currentUser);
+      const hasDemoUser = Boolean(sessionStorage.getItem('meetmind_demo_user'));
+      if (!hasFirebaseUser && !hasDemoUser) {
+        return;
+      }
 
-  // Listen to Firebase auth state changes
+      try {
+        if (isConfigured) {
+          await signOut(auth);
+        }
+      } catch (err) {
+        console.warn('Error signing out after 401:', err);
+      }
+      sessionStorage.removeItem('meetmind_demo_user');
+      setUser(null);
+      setAuthError('Your session has expired. Please sign in again.');
+    });
+  }, [isConfigured]);
+
+  // Listen to Firebase auth state changes using onIdTokenChanged
   useEffect(() => {
     if (!isConfigured) {
       // Check for saved demo session in sessionStorage
@@ -108,15 +160,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser: User | null) => {
+    const unsubscribe = onIdTokenChanged(auth, (firebaseUser: User | null) => {
       if (firebaseUser) {
+        const isAnonymous = Boolean(firebaseUser.isAnonymous);
+        const hasDemoSession = Boolean(sessionStorage.getItem('meetmind_demo_user'));
+        const isDemo = isAnonymous || hasDemoSession;
         setUser({
           uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'User'),
+          email: firebaseUser.email || (isDemo ? 'demo@meetmind.ai' : null),
+          displayName:
+            firebaseUser.displayName ||
+            (isDemo ? 'Demo User' : (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'User')),
+          isDemoUser: isDemo,
         });
       } else {
-        setUser(null);
+        if (!sessionStorage.getItem('meetmind_demo_user')) {
+          setUser(null);
+        }
       }
       setLoading(false);
     });
@@ -137,7 +197,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser({
         uid: cred.user.uid,
         email: cred.user.email,
-        displayName: cred.user.displayName || (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
+        displayName:
+          cred.user.displayName ||
+          (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
       });
     } catch (err: unknown) {
       const fbErr = err as { code?: string; message?: string };
@@ -161,7 +223,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser({
         uid: cred.user.uid,
         email: cred.user.email,
-        displayName: cred.user.displayName || (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
+        displayName:
+          cred.user.displayName ||
+          (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
       });
     } catch (err: unknown) {
       const fbErr = err as { code?: string; message?: string };
@@ -176,15 +240,77 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const loginDemo = async (email: string = 'demo@meetmind.ai'): Promise<void> => {
     setLoading(true);
     setAuthError(null);
-    const demoUser: AuthUser = {
-      uid: 'demo_user_101',
-      email: email.trim(),
-      displayName: email.split('@')[0] || 'Demo User',
-      isDemoUser: true,
-    };
-    sessionStorage.setItem('meetmind_demo_user', JSON.stringify(demoUser));
-    setUser(demoUser);
-    setLoading(false);
+    try {
+      if (!isConfigured) {
+        // Fallback to local session if client Firebase config is not present
+        const fallbackDemoUser: AuthUser = {
+          uid: 'demo_user_101',
+          email: email.trim(),
+          displayName: 'Demo User',
+          isDemoUser: true,
+        };
+        sessionStorage.setItem('meetmind_demo_user', JSON.stringify(fallbackDemoUser));
+        setUser(fallbackDemoUser);
+        return;
+      }
+
+      // Check for configured demo user credentials in environment
+      const envDemoEmail = (import.meta.env.VITE_FIREBASE_DEMO_EMAIL || '').trim();
+      const envDemoPassword = (import.meta.env.VITE_FIREBASE_DEMO_PASSWORD || '').trim();
+
+      if (envDemoEmail && envDemoPassword) {
+        try {
+          const cred = await signInWithEmailAndPassword(auth, envDemoEmail, envDemoPassword);
+          const demoUser: AuthUser = {
+            uid: cred.user.uid,
+            email: cred.user.email,
+            displayName: cred.user.displayName || 'Demo User',
+            isDemoUser: true,
+          };
+          sessionStorage.setItem('meetmind_demo_user', JSON.stringify(demoUser));
+          setUser(demoUser);
+          return;
+        } catch (credErr: unknown) {
+          const fbErr = credErr as { code?: string; message?: string };
+          if (fbErr.code === 'auth/user-not-found' || fbErr.code === 'auth/invalid-credential') {
+            try {
+              const newCred = await createUserWithEmailAndPassword(auth, envDemoEmail, envDemoPassword);
+              const demoUser: AuthUser = {
+                uid: newCred.user.uid,
+                email: newCred.user.email,
+                displayName: 'Demo User',
+                isDemoUser: true,
+              };
+              sessionStorage.setItem('meetmind_demo_user', JSON.stringify(demoUser));
+              setUser(demoUser);
+              return;
+            } catch (createErr) {
+              console.warn('Demo user auto-provisioning failed; falling back to anonymous auth:', createErr);
+            }
+          } else {
+            console.warn('Demo credential sign-in failed; falling back to anonymous auth:', fbErr);
+          }
+        }
+      }
+
+      // Default: Authenticate anonymously with Firebase
+      const anonCred = await signInAnonymously(auth);
+      const anonDemoUser: AuthUser = {
+        uid: anonCred.user.uid,
+        email: 'demo@meetmind.ai',
+        displayName: 'Demo User',
+        isDemoUser: true,
+      };
+      sessionStorage.setItem('meetmind_demo_user', JSON.stringify(anonDemoUser));
+      setUser(anonDemoUser);
+    } catch (err: unknown) {
+      const fbErr = err as { code?: string; message?: string };
+      const formatted = formatAuthError(fbErr.code || '', fbErr.message || 'Demo sign-in failed.');
+      setAuthError(formatted);
+      throw new Error(formatted);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const logout = async (): Promise<void> => {

@@ -88,6 +88,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       await loginDemo('demo@meetmind.ai');
       if (onClose) onClose();
+    } catch {
+      // Errors handled in AuthContext and rendered via authError
     } finally {
       setIsSubmitting(false);
     }

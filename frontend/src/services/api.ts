@@ -19,9 +19,11 @@ export const API_BASE_URL: string =
     import.meta.env.VITE_API_BASE_URL) ||
   'http://localhost:8000';
 
+export type AuthTokenGetter = (forceRefresh?: boolean) => Promise<string | null>;
+
 class ApiService {
   private baseUrl: string;
-  private authTokenGetter: (() => Promise<string | null>) | null = null;
+  private authTokenGetter: AuthTokenGetter | null = null;
   private onUnauthorized: (() => void) | null = null;
 
   constructor(baseUrl: string) {
@@ -30,26 +32,28 @@ class ApiService {
 
   /**
    * Registers a token getter function that provides the current Firebase ID token.
+   * Supports an optional forceRefresh boolean parameter.
    */
-  setAuthTokenGetter(getter: () => Promise<string | null>): void {
+  setAuthTokenGetter(getter: AuthTokenGetter | null): void {
     this.authTokenGetter = getter;
   }
 
   /**
    * Registers a callback invoked when any request receives an HTTP 401 Unauthorized response.
    */
-  setOnUnauthorized(callback: () => void): void {
+  setOnUnauthorized(callback: (() => void) | null): void {
     this.onUnauthorized = callback;
   }
 
   /**
    * Asynchronously retrieves the Authorization header with the current Bearer token.
+   * If forceRefresh is true, requests a freshly minted ID token from Firebase.
    */
-  private async getAuthHeaders(): Promise<Record<string, string>> {
+  private async getAuthHeaders(forceRefresh: boolean = false): Promise<Record<string, string>> {
     const headers: Record<string, string> = {};
     if (this.authTokenGetter) {
       try {
-        const token = await this.authTokenGetter();
+        const token = await this.authTokenGetter(forceRefresh);
         if (token) {
           headers['Authorization'] = `Bearer ${token}`;
         }
@@ -58,6 +62,49 @@ class ApiService {
       }
     }
     return headers;
+  }
+
+  /**
+   * Performs an HTTP fetch with:
+   * 1. Automatic Authorization: Bearer <token> attachment.
+   * 2. Single token-refresh retry on 401 if a token was sent and allowRetry=true.
+   * 3. Invocation of onUnauthorized only when a genuine, unrecoverable 401 occurs on an authenticated request.
+   */
+  private async fetchWithAuth(
+    url: string,
+    options: RequestInit = {},
+    allowRetry: boolean = true
+  ): Promise<Response> {
+    const authHeaders = await this.getAuthHeaders(false);
+    const headers: Record<string, string> = {
+      ...((options.headers as Record<string, string>) || {}),
+      ...authHeaders,
+    };
+
+    let response = await fetch(url, { ...options, headers });
+
+    // If 401 received, an Authorization token was sent, and retry is allowed:
+    // attempt a single token refresh and retry
+    if (response.status === 401 && allowRetry && authHeaders['Authorization']) {
+      try {
+        const freshAuthHeaders = await this.getAuthHeaders(true);
+        if (freshAuthHeaders['Authorization']) {
+          const retryHeaders: Record<string, string> = {
+            ...((options.headers as Record<string, string>) || {}),
+            ...freshAuthHeaders,
+          };
+          response = await fetch(url, { ...options, headers: retryHeaders });
+        }
+      } catch (err) {
+        console.warn('Token refresh during 401 retry failed:', err);
+      }
+    }
+
+    if (response.status === 401) {
+      this.handleUnauthorizedResponse(response.status);
+    }
+
+    return response;
   }
 
   /**
@@ -137,23 +184,19 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/analyze`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in again.');
         }
@@ -213,23 +256,19 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/clarify`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in again.');
         }
@@ -287,21 +326,17 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
-          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }
@@ -344,21 +379,17 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
-          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }
@@ -407,21 +438,17 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'DELETE',
         headers: {
           Accept: 'application/json',
-          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }
@@ -473,23 +500,19 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/pdf, application/json',
-          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }
@@ -543,21 +566,17 @@ class ApiService {
     const url = `${this.baseUrl}/api/meetings/${encodeURIComponent(meetingId)}/export/pdf`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: {
           Accept: 'application/pdf, application/json',
-          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
-
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }

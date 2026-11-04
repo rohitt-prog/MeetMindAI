@@ -17,11 +17,11 @@ class ApiServiceTestClient {
     this.onUnauthorized = callback;
   }
 
-  async getAuthHeaders() {
+  async getAuthHeaders(forceRefresh = false) {
     const headers = {};
     if (this.authTokenGetter) {
       try {
-        const token = await this.authTokenGetter();
+        const token = await this.authTokenGetter(forceRefresh);
         if (token) {
           headers['Authorization'] = `Bearer ${token}`;
         }
@@ -30,6 +30,37 @@ class ApiServiceTestClient {
       }
     }
     return headers;
+  }
+
+  async fetchWithAuth(url, options = {}, allowRetry = true) {
+    const authHeaders = await this.getAuthHeaders(false);
+    const headers = {
+      ...(options.headers || {}),
+      ...authHeaders,
+    };
+
+    let response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401 && allowRetry && authHeaders['Authorization']) {
+      try {
+        const freshAuthHeaders = await this.getAuthHeaders(true);
+        if (freshAuthHeaders['Authorization']) {
+          const retryHeaders = {
+            ...(options.headers || {}),
+            ...freshAuthHeaders,
+          };
+          response = await fetch(url, { ...options, headers: retryHeaders });
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    if (response.status === 401) {
+      this.handleUnauthorizedResponse(response.status);
+    }
+
+    return response;
   }
 
   handleUnauthorizedResponse(status) {
@@ -92,22 +123,19 @@ class ApiServiceTestClient {
     const url = `${this.baseUrl}/api/meetings/analyze`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...authHeaders,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in again.');
         }
@@ -218,20 +246,17 @@ class ApiServiceTestClient {
     const url = `${this.baseUrl}/api/meetings?limit=${limit}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-    const authHeaders = await this.getAuthHeaders();
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
-          ...authHeaders,
         },
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.handleUnauthorizedResponse(response.status);
         if (response.status === 401) {
           throw new Error('Authentication required or session expired. Please sign in.');
         }
@@ -268,7 +293,7 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
@@ -308,7 +333,7 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'DELETE',
         headers: {
           Accept: 'application/json',
@@ -359,7 +384,7 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -413,7 +438,7 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch(url, {
+      const response = await this.fetchWithAuth(url, {
         method: 'GET',
         headers: {
           Accept: 'application/pdf, application/json',
@@ -1134,5 +1159,246 @@ describe('Frontend API Service & State Integration Tests', () => {
       async () => client.analyzeMeeting({ transcript: 'Large transcript...' }),
       /Payload Too Large/
     );
+  });
+
+  // ============================================================================
+  // Session Expiration & Token Lifecycle Tests
+  // ============================================================================
+
+  it('Session & Auth: waits for auth initialization before attaching token', async () => {
+    let authReady = false;
+    // Simulate async auth initialization delay
+    const mockAuthInit = new Promise((resolve) => {
+      setTimeout(() => {
+        authReady = true;
+        resolve();
+      }, 20);
+    });
+
+    client.setAuthTokenGetter(async () => {
+      await mockAuthInit;
+      return authReady ? 'token_after_auth_ready' : null;
+    });
+
+    let capturedHeaders = null;
+    globalThis.fetch = async (url, options) => {
+      capturedHeaders = options.headers;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const meetings = await client.listMeetings(5);
+    assert.deepEqual(meetings, []);
+    assert.equal(capturedHeaders['Authorization'], 'Bearer token_after_auth_ready');
+    client.setAuthTokenGetter(null);
+  });
+
+  it('Session & Auth: unauthenticated requests omit Authorization header cleanly', async () => {
+    client.setAuthTokenGetter(async () => null);
+
+    let capturedHeaders = null;
+    globalThis.fetch = async (url, options) => {
+      capturedHeaders = options.headers;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    await client.listMeetings(5);
+    assert.equal(capturedHeaders['Authorization'], undefined, 'No Authorization header should be attached');
+    client.setAuthTokenGetter(null);
+  });
+
+  it('Session & Auth: 401 triggers single token refresh and transparent retry', async () => {
+    let fetchCount = 0;
+    let refreshRequested = false;
+
+    client.setAuthTokenGetter(async (forceRefresh = false) => {
+      if (forceRefresh) {
+        refreshRequested = true;
+        return 'fresh_refreshed_id_token_xyz';
+      }
+      return 'expired_initial_id_token_abc';
+    });
+
+    let unauthorizedTriggered = false;
+    client.setOnUnauthorized(() => {
+      unauthorizedTriggered = true;
+    });
+
+    globalThis.fetch = async (url, options) => {
+      fetchCount++;
+      const authHeader = options.headers['Authorization'];
+
+      // First request sent with expired token: returns 401
+      if (authHeader === 'Bearer expired_initial_id_token_abc') {
+        return new Response(JSON.stringify({ detail: 'Token has expired' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Retried request sent with refreshed token: succeeds with 200
+      if (authHeader === 'Bearer fresh_refreshed_id_token_xyz') {
+        return new Response(JSON.stringify([{ meeting_id: 'm_123', title: 'Roadmap' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response('Unauthorized', { status: 401 });
+    };
+
+    const result = await client.listMeetings(10);
+    assert.equal(fetchCount, 2, 'Should execute exactly 2 fetch calls (original + retry)');
+    assert.equal(refreshRequested, true, 'forceRefresh=true should have been requested from getter');
+    assert.equal(unauthorizedTriggered, false, 'onUnauthorized should not fire because retry succeeded');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].meeting_id, 'm_123');
+
+    client.setAuthTokenGetter(null);
+    client.setOnUnauthorized(null);
+  });
+
+  it('Session & Auth: prevents infinite retry loops when refreshed token is also 401', async () => {
+    let fetchCount = 0;
+    let refreshCalls = 0;
+    let unauthorizedTriggered = false;
+
+    client.setAuthTokenGetter(async (forceRefresh = false) => {
+      if (forceRefresh) refreshCalls++;
+      return 'always_rejected_token';
+    });
+
+    client.setOnUnauthorized(() => {
+      unauthorizedTriggered = true;
+    });
+
+    globalThis.fetch = async () => {
+      fetchCount++;
+      return new Response(JSON.stringify({ detail: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    await assert.rejects(
+      async () => client.listMeetings(10),
+      /Authentication required or session expired/
+    );
+
+    assert.equal(fetchCount, 2, 'Should retry at most once and strictly prevent infinite loop');
+    assert.equal(refreshCalls, 1, 'Token refresh requested once');
+    assert.equal(unauthorizedTriggered, true, 'onUnauthorized should be invoked after exhausted retry');
+
+    client.setAuthTokenGetter(null);
+    client.setOnUnauthorized(null);
+  });
+
+  it('Session & Auth: signin immediately provides valid token without stale closures', async () => {
+    // Simulate user state transitions
+    let activeToken = null;
+    const tokenGetter = async () => activeToken;
+    client.setAuthTokenGetter(tokenGetter);
+
+    // Initial visitor state: null token
+    assert.equal(await tokenGetter(), null);
+
+    // User signs in: token becomes immediately available synchronously
+    activeToken = 'signed_in_user_firebase_token';
+
+    let capturedAuthHeader = null;
+    globalThis.fetch = async (url, options) => {
+      capturedAuthHeader = options.headers['Authorization'];
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    // First call to listMeetings after login
+    await client.listMeetings(25);
+    assert.equal(capturedAuthHeader, 'Bearer signed_in_user_firebase_token');
+
+    client.setAuthTokenGetter(null);
+  });
+
+  it('Demo Account: demo sign-in provides valid token and executes API requests without 401 or expiration', async () => {
+    let unauthorizedTriggered = false;
+    let capturedAuthHeader = null;
+
+    client.setOnUnauthorized(() => {
+      unauthorizedTriggered = true;
+    });
+
+    // Simulate demo authentication yielding a real Firebase ID token
+    const demoToken = 'valid_google_signed_demo_id_token_xyz';
+    client.setAuthTokenGetter(async () => demoToken);
+
+    globalThis.fetch = async (url, options) => {
+      capturedAuthHeader = options.headers['Authorization'];
+      return new Response(
+        JSON.stringify([
+          {
+            meeting_id: 'm_demo_1',
+            title: 'Q3 Product Strategy',
+            meeting_date: '2026-11-04T10:00:00Z',
+            action_items_count: 3,
+            clarifications_status: 'resolved',
+            created_at: '2026-11-04T10:30:00Z',
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    };
+
+    const meetings = await client.listMeetings(25);
+    assert.equal(meetings.length, 1);
+    assert.equal(meetings[0].meeting_id, 'm_demo_1');
+    assert.equal(capturedAuthHeader, 'Bearer valid_google_signed_demo_id_token_xyz');
+    assert.equal(unauthorizedTriggered, false, 'onUnauthorized must not be called for valid demo session');
+
+    client.setAuthTokenGetter(null);
+    client.setOnUnauthorized(null);
+  });
+
+  it('Demo Account: rejecting unverified/dummy tokens invokes onUnauthorized and triggers signout', async () => {
+    let unauthorizedTriggered = false;
+    let callCount = 0;
+
+    client.setOnUnauthorized(() => {
+      unauthorizedTriggered = true;
+    });
+
+    // Simulating former faulty behavior: dummy token sent when backend expects Firebase Admin verification
+    client.setAuthTokenGetter(async () => 'demo_token_demo_user_101');
+
+    globalThis.fetch = async () => {
+      callCount++;
+      return new Response(
+        JSON.stringify({ detail: 'Invalid authentication token. Verification failed.' }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    };
+
+    await assert.rejects(
+      async () => client.listMeetings(25),
+      /Authentication required or session expired/
+    );
+
+    assert.equal(unauthorizedTriggered, true, 'onUnauthorized should fire on unverified dummy token');
+    assert.equal(callCount, 2, 'Should retry once and fail safely');
+
+    client.setAuthTokenGetter(null);
+    client.setOnUnauthorized(null);
   });
 });

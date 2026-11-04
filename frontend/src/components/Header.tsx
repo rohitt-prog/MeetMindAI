@@ -16,7 +16,9 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { user, logout } = useAuth();
 
-  const userInitial = user?.email
+  const userInitial = user?.isDemoUser
+    ? 'D'
+    : user?.email
     ? user.email.charAt(0).toUpperCase()
     : user?.displayName
     ? user.displayName.charAt(0).toUpperCase()
@@ -70,7 +72,9 @@ export const Header: React.FC<HeaderProps> = ({
                 {userInitial}
               </div>
               <span className="hidden md:inline text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[140px] truncate">
-                {user.email || user.displayName || 'Authenticated'}
+                {user.isDemoUser
+                  ? `${user.displayName || 'Demo User'} (Demo)`
+                  : (user.email || user.displayName || 'Authenticated')}
               </span>
             </div>
 

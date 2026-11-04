@@ -80,10 +80,6 @@ function AppContent() {
         appName: data.app,
         lastChecked: new Date(),
       });
-      // Only fetch meetings when user is logged in
-      if (user) {
-        fetchRecentMeetings();
-      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown connection error';
       setConnectionState({
@@ -93,7 +89,7 @@ function AppContent() {
         lastChecked: new Date(),
       });
     }
-  }, [fetchRecentMeetings, user]);
+  }, []);
 
   useEffect(() => {
     // Sync theme class on <html>
