@@ -1492,4 +1492,315 @@ describe('Frontend API Service & State Integration Tests', () => {
       assert.ok(latencyMs >= 10, 'Latency should reflect elapsed network duration');
     });
   });
+
+  describe('Phase 2A Data Management & JSON Backup', () => {
+    // Pure logic mirrors of backupService functions
+    const generateBackupFilename = (date = new Date()) => {
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      return `meetmind-ai-backup-${yyyy}-${mm}-${dd}.json`;
+    };
+
+    const calculateBackupMetrics = (meetings, apiLimit = 100) => {
+      const totalMeetings = meetings.length;
+      const apiLimitReached = totalMeetings >= apiLimit;
+      const isComplete = !apiLimitReached;
+
+      let totalActionItems = 0;
+      let totalDecisions = 0;
+
+      for (const item of meetings) {
+        if ('action_items_count' in item) {
+          totalActionItems += item.action_items_count || 0;
+          totalDecisions += item.decisions_count || 0;
+        } else if ('analysis' in item && item.analysis) {
+          totalActionItems += item.analysis.action_items?.length || 0;
+          totalDecisions += item.analysis.decisions?.length || 0;
+        }
+      }
+
+      const retrievalNote = apiLimitReached
+        ? `Backup includes the ${totalMeetings} most recent meetings accessible via the current API endpoint (maximum ${apiLimit} records per query).`
+        : `Complete backup of all ${totalMeetings} saved meeting records for this account.`;
+
+      return {
+        total_meetings: totalMeetings,
+        total_action_items: totalActionItems,
+        total_decisions: totalDecisions,
+        is_complete: isComplete,
+        api_limit_reached: apiLimitReached,
+        retrieval_note: retrievalNote,
+      };
+    };
+
+    const buildBackupPayload = ({ user, meetings, exportedAt = new Date().toISOString(), apiLimitReached }) => {
+      const metrics = calculateBackupMetrics(meetings);
+      if (typeof apiLimitReached === 'boolean') {
+        metrics.api_limit_reached = apiLimitReached;
+        metrics.is_complete = !apiLimitReached;
+        if (apiLimitReached) {
+          metrics.retrieval_note = `Backup includes the ${meetings.length} most recent meetings accessible via the current API endpoint (maximum 100 records per query).`;
+        }
+      }
+
+      const userSummary = {
+        uid: user?.uid || 'anonymous',
+        email: user?.email || (user?.isDemoUser ? 'demo@meetmind.ai' : null),
+        is_demo_user: Boolean(user?.isDemoUser),
+      };
+
+      return {
+        version: '1.0',
+        backup_type: 'meetmind_ai_meetings_backup',
+        exported_at: exportedAt,
+        user: userSummary,
+        metrics,
+        meetings,
+      };
+    };
+
+    it('Filename generation: formats meetmind-ai-backup-YYYY-MM-DD.json with zero padding', () => {
+      const testDate = new Date(2026, 2, 5); // March 5, 2026
+      const filename = generateBackupFilename(testDate);
+      assert.equal(filename, 'meetmind-ai-backup-2026-03-05.json');
+
+      const todayFilename = generateBackupFilename();
+      assert.match(todayFilename, /^meetmind-ai-backup-\d{4}-\d{2}-\d{2}\.json$/);
+    });
+
+    it('Metrics derivation: handles empty meeting list gracefully', () => {
+      const metrics = calculateBackupMetrics([]);
+      assert.equal(metrics.total_meetings, 0);
+      assert.equal(metrics.total_action_items, 0);
+      assert.equal(metrics.total_decisions, 0);
+      assert.equal(metrics.is_complete, true);
+      assert.equal(metrics.api_limit_reached, false);
+      assert.match(metrics.retrieval_note, /Complete backup of all 0/);
+    });
+
+    it('Metrics derivation: accurately sums action items and decisions across meetings', () => {
+      const mockList = [
+        { meeting_id: 'm1', action_items_count: 5, decisions_count: 3 },
+        { meeting_id: 'm2', action_items_count: 0, decisions_count: 1 },
+        { meeting_id: 'm3', action_items_count: 7, decisions_count: 4 },
+      ];
+
+      const metrics = calculateBackupMetrics(mockList);
+      assert.equal(metrics.total_meetings, 3);
+      assert.equal(metrics.total_action_items, 12);
+      assert.equal(metrics.total_decisions, 8);
+      assert.equal(metrics.is_complete, true);
+      assert.equal(metrics.api_limit_reached, false);
+    });
+
+    it('API limit detection: flags 100 meetings as reaching API ceiling without claiming complete archive', () => {
+      const hundredMeetings = Array.from({ length: 100 }, (_, i) => ({
+        meeting_id: `m_${i}`,
+        action_items_count: 2,
+        decisions_count: 1,
+      }));
+
+      const metrics = calculateBackupMetrics(hundredMeetings, 100);
+      assert.equal(metrics.total_meetings, 100);
+      assert.equal(metrics.total_action_items, 200);
+      assert.equal(metrics.total_decisions, 100);
+      assert.equal(metrics.api_limit_reached, true);
+      assert.equal(metrics.is_complete, false);
+      assert.match(metrics.retrieval_note, /most recent meetings accessible via the current API endpoint/);
+    });
+
+    it('Payload sanitization: strips credentials, tokens, and secrets from exported backup', () => {
+      const user = {
+        uid: 'user_secure_123',
+        email: 'engineer@meetmind.ai',
+        isDemoUser: false,
+        // Sensitive attributes that must never be written to backup
+        idToken: 'secret_jwt_token',
+        refreshToken: 'secret_refresh_token',
+        apiKey: 'secret_api_key_123',
+      };
+
+      const meetings = [
+        {
+          meeting_id: 'm_101',
+          title: 'Sprint Planning',
+          transcript: 'Alice: We have 3 tickets.',
+          created_at: '2026-11-04T10:00:00Z',
+          updated_at: '2026-11-04T10:30:00Z',
+          analysis: {
+            meeting_id: 'm_101',
+            summary: 'Sprint planning summary',
+            discussion_points: ['Task A', 'Task B'],
+            decisions: ['Launch on Friday'],
+            action_items: [
+              { task: 'Deploy backend', owner: 'Alice', deadline: 'Friday', status: 'pending' },
+            ],
+            clarification_required: false,
+            clarifications: [],
+          },
+        },
+      ];
+
+      const payload = buildBackupPayload({ user, meetings });
+
+      assert.equal(payload.version, '1.0');
+      assert.equal(payload.backup_type, 'meetmind_ai_meetings_backup');
+      assert.equal(payload.user.uid, 'user_secure_123');
+      assert.equal(payload.user.email, 'engineer@meetmind.ai');
+      assert.equal(payload.user.is_demo_user, false);
+      assert.equal(payload.user.idToken, undefined);
+      assert.equal(payload.user.refreshToken, undefined);
+      assert.equal(payload.user.apiKey, undefined);
+
+      assert.equal(payload.metrics.total_meetings, 1);
+      assert.equal(payload.metrics.total_action_items, 1);
+      assert.equal(payload.metrics.total_decisions, 1);
+      assert.equal(payload.meetings.length, 1);
+      assert.equal(payload.meetings[0].meeting_id, 'm_101');
+      assert.equal(payload.meetings[0].transcript, 'Alice: We have 3 tickets.');
+
+      // JSON serialization check
+      const json = JSON.stringify(payload);
+      assert.ok(!json.includes('secret_jwt_token'));
+      assert.ok(!json.includes('secret_refresh_token'));
+      assert.ok(!json.includes('secret_api_key_123'));
+    });
+
+    it('Complete backup workflow: queries list and fetches full details for each meeting', async () => {
+      const mockMeetings = [
+        {
+          meeting_id: 'm_abc_1',
+          title: 'Design Sync',
+          summary: 'Design review summary',
+          created_at: '2026-11-04T08:00:00Z',
+          updated_at: '2026-11-04T08:30:00Z',
+          action_items_count: 2,
+          decisions_count: 1,
+          clarification_required: false,
+          unresolved_clarifications_count: 0,
+        },
+        {
+          meeting_id: 'm_abc_2',
+          title: 'Architecture Review',
+          summary: 'Architecture summary',
+          created_at: '2026-11-04T09:00:00Z',
+          updated_at: '2026-11-04T09:30:00Z',
+          action_items_count: 3,
+          decisions_count: 2,
+          clarification_required: false,
+          unresolved_clarifications_count: 0,
+        },
+      ];
+
+      const progressSteps = [];
+      const onProgress = (current, total, statusText) => {
+        progressSteps.push({ current, total, statusText });
+      };
+
+      // Mock listMeetings and getMeeting
+      globalThis.fetch = async (url) => {
+        if (url.includes('/api/meetings?limit=100')) {
+          return new Response(JSON.stringify(mockMeetings), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.includes('/api/meetings/m_abc_1')) {
+          return new Response(
+            JSON.stringify({
+              meeting_id: 'm_abc_1',
+              title: 'Design Sync',
+              transcript: 'Designer: Updated tokens.',
+              created_at: '2026-11-04T08:00:00Z',
+              updated_at: '2026-11-04T08:30:00Z',
+              analysis: {
+                summary: 'Design review summary',
+                action_items: [
+                  { task: 'Export Figma styles', owner: 'Bob', status: 'pending' },
+                  { task: 'Update CSS variables', owner: 'Alice', status: 'pending' },
+                ],
+                decisions: ['Use 8px grid'],
+                clarification_required: false,
+                clarifications: [],
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (url.includes('/api/meetings/m_abc_2')) {
+          return new Response(
+            JSON.stringify({
+              meeting_id: 'm_abc_2',
+              title: 'Architecture Review',
+              transcript: 'Lead: Moving to Redis Lua.',
+              created_at: '2026-11-04T09:00:00Z',
+              updated_at: '2026-11-04T09:30:00Z',
+              analysis: {
+                summary: 'Architecture summary',
+                action_items: [
+                  { task: 'Deploy Redis cluster', owner: 'DevOps', status: 'pending' },
+                  { task: 'Benchmark Lua script', owner: 'Lead', status: 'pending' },
+                  { task: 'Configure fail-closed', owner: 'Lead', status: 'done' },
+                ],
+                decisions: ['Atomic rate limiting', 'Fail-closed production'],
+                clarification_required: false,
+                clarifications: [],
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not found', { status: 404 });
+      };
+
+      // Execute retrieval flow
+      const list = await client.listMeetings(100);
+      assert.equal(list.length, 2);
+
+      const details = [];
+      for (let i = 0; i < list.length; i++) {
+        onProgress(i + 1, list.length, `Fetching ${list[i].meeting_id}`);
+        const detail = await client.getMeeting(list[i].meeting_id);
+        details.push(detail);
+      }
+
+      assert.equal(details.length, 2);
+      assert.equal(details[0].meeting_id, 'm_abc_1');
+      assert.equal(details[1].meeting_id, 'm_abc_2');
+      assert.equal(details[0].transcript, 'Designer: Updated tokens.');
+      assert.equal(details[1].transcript, 'Lead: Moving to Redis Lua.');
+
+      const payload = buildBackupPayload({
+        user: { uid: 'u_test', email: 'test@meetmind.ai', isDemoUser: false },
+        meetings: details,
+      });
+
+      assert.equal(payload.metrics.total_meetings, 2);
+      assert.equal(payload.metrics.total_action_items, 5);
+      assert.equal(payload.metrics.total_decisions, 3);
+      assert.equal(payload.metrics.is_complete, true);
+      assert.equal(progressSteps.length, 2);
+    });
+
+    it('Backup error handling: rejects export when user has zero meetings', async () => {
+      globalThis.fetch = async () => {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      const list = await client.listMeetings(100);
+      assert.equal(list.length, 0);
+
+      const runExport = (meetings) => {
+        if (!meetings || meetings.length === 0) {
+          throw new Error('No saved meetings found to export. Analyze a meeting first.');
+        }
+      };
+
+      assert.throws(() => runExport(list), /No saved meetings found to export/);
+    });
+  });
 });

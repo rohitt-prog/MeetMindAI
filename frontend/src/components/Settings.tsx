@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   User,
   Shield,
@@ -17,10 +17,17 @@ import {
   Mail,
   ShieldCheck,
   Sliders,
+  Database,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { BackendConnectionState, ThemeMode } from '../types';
-import { API_BASE_URL } from '../services/api';
+import { BackendConnectionState, ThemeMode, MeetingListItem } from '../types';
+import { API_BASE_URL, apiService } from '../services/api';
+import {
+  exportMeetingsBackup,
+  calculateBackupMetrics,
+  API_MAX_MEETING_LIMIT,
+} from '../services/backupService';
 
 interface SettingsProps {
   connectionState: BackendConnectionState;
@@ -101,6 +108,83 @@ export const Settings: React.FC<SettingsProps> = ({
       setIsSendingReset(false);
     }
   };
+
+  // Data Management & Summary state
+  const [meetingsSummary, setMeetingsSummary] = useState<MeetingListItem[] | null>(null);
+  const [isLoadingSummary, setIsLoadingSummary] = useState<boolean>(true);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Backup Export state
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [exportProgress, setExportProgress] = useState<{
+    current: number;
+    total: number;
+    statusText: string;
+  } | null>(null);
+  const [exportSuccess, setExportSuccess] = useState<{
+    filename: string;
+    totalMeetings: number;
+    totalActionItems: number;
+    message: string;
+  } | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const loadSummary = useCallback(async () => {
+    if (!user) {
+      setMeetingsSummary([]);
+      setIsLoadingSummary(false);
+      return;
+    }
+    setIsLoadingSummary(true);
+    setSummaryError(null);
+    try {
+      const data = await apiService.listMeetings(API_MAX_MEETING_LIMIT);
+      setMeetingsSummary(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to retrieve meeting summary from backend.';
+      setSummaryError(msg);
+    } finally {
+      setIsLoadingSummary(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  const handleExportBackup = async () => {
+    if (!user) return;
+    setIsExporting(true);
+    setExportSuccess(null);
+    setExportError(null);
+    setExportProgress({ current: 0, total: 0, statusText: 'Initializing backup...' });
+
+    try {
+      const result = await exportMeetingsBackup({
+        user,
+        onProgress: (current, total, statusText) => {
+          setExportProgress({ current, total, statusText });
+        },
+      });
+
+      setExportSuccess({
+        filename: result.filename,
+        totalMeetings: result.totalMeetings,
+        totalActionItems: result.totalActionItems,
+        message: `Successfully generated and downloaded backup (${result.totalMeetings} meeting${result.totalMeetings === 1 ? '' : 's'}).`,
+      });
+      // Also refresh summary to keep totals aligned
+      loadSummary();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'An error occurred while generating backup.';
+      setExportError(msg);
+    } finally {
+      setIsExporting(false);
+      setExportProgress(null);
+    }
+  };
+
+  const metrics = calculateBackupMetrics(meetingsSummary || []);
 
   // Format creation and login date strings
   const formatDate = (dateStr?: string | null): string => {
@@ -465,7 +549,243 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Card 3: Upcoming Capabilities (Roadmap) */}
+          {/* Card 3: Data Management & JSON Backup */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Data Management & Backup
+                  </h2>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Meeting intelligence metrics and full JSON export
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadSummary}
+                disabled={isLoadingSummary || isExporting}
+                title="Refresh meeting metrics"
+                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-500 dark:text-slate-400 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${isLoadingSummary ? 'animate-spin text-indigo-500' : ''}`}
+                />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-5">
+              {/* Summary Metrics Section */}
+              {isLoadingSummary ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80 animate-pulse space-y-2"
+                    >
+                      <div className="h-3 w-16 bg-slate-200 dark:bg-slate-800 rounded" />
+                      <div className="h-6 w-12 bg-slate-300 dark:bg-slate-700 rounded" />
+                      <div className="h-2 w-24 bg-slate-200 dark:bg-slate-800 rounded" />
+                    </div>
+                  ))}
+                </div>
+              ) : summaryError ? (
+                <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 flex items-start justify-between gap-3 text-xs">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-rose-800 dark:text-rose-300">
+                        Failed to Load Meeting Summary
+                      </p>
+                      <p className="text-rose-700 dark:text-rose-400 text-[11px] mt-0.5">
+                        {summaryError}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadSummary}
+                    className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-medium text-[11px] shrink-0 transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* Saved Meetings */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 dark:text-slate-500">
+                          Saved Meetings
+                        </span>
+                        <span
+                          className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                            metrics.api_limit_reached
+                              ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60'
+                              : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60'
+                          }`}
+                        >
+                          {metrics.api_limit_reached ? 'API Cap' : 'Complete'}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white font-mono">
+                        {metrics.api_limit_reached ? `${metrics.total_meetings}+` : metrics.total_meetings}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        persisted in Firestore
+                      </p>
+                    </div>
+
+                    {/* Total Action Items */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 dark:text-slate-500">
+                          Action Items
+                        </span>
+                        <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                          Extracted
+                        </span>
+                      </div>
+                      <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white font-mono">
+                        {metrics.total_action_items}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        tasks & deliverables
+                      </p>
+                    </div>
+
+                    {/* Confirmed Decisions */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 dark:text-slate-500">
+                          Decisions
+                        </span>
+                        <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300/60 dark:border-slate-700">
+                          Agreed
+                        </span>
+                      </div>
+                      <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white font-mono">
+                        {metrics.total_decisions}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        explicit agreements
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Empty State Banner */}
+                  {metrics.total_meetings === 0 && (
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200/60 dark:border-slate-800/60 text-center py-6">
+                      <Database className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                      <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        No Saved Meetings Found
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 max-w-sm mx-auto">
+                        Transcripts analyzed in the Workspace will automatically be saved and summarized here.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* API Limit Disclosure */}
+                  {metrics.api_limit_reached && (
+                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <p className="text-[11px] leading-relaxed">
+                        <strong className="font-semibold">API Maximum Reached:</strong> The current backend endpoint returns up to {API_MAX_MEETING_LIMIT} meetings per query without pagination. The metrics and export reflect your {metrics.total_meetings} most recent meetings.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* JSON Export Action Section */}
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                      <Download className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Export All Meetings as JSON</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Download complete meeting transcripts, action items, decisions, and clarification audit logs.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleExportBackup}
+                    disabled={isExporting || isLoadingSummary || (meetingsSummary !== null && meetingsSummary.length === 0)}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 shrink-0 shadow-sm"
+                  >
+                    {isExporting ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Exporting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Export Backup</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Progress bar while exporting */}
+                {isExporting && exportProgress && (
+                  <div className="space-y-1.5 p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-800/60">
+                    <div className="flex items-center justify-between text-[11px] text-indigo-700 dark:text-indigo-300 font-medium">
+                      <span className="truncate max-w-[80%]">{exportProgress.statusText}</span>
+                      {exportProgress.total > 0 && (
+                        <span className="font-mono text-[10px]">
+                          {Math.round((exportProgress.current / exportProgress.total) * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    {exportProgress.total > 0 && (
+                      <div className="w-full bg-indigo-100 dark:bg-indigo-900/50 h-1.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-indigo-600 dark:bg-indigo-500 h-full rounded-full transition-all duration-150"
+                          style={{ width: `${Math.min(100, (exportProgress.current / exportProgress.total) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Export Success Message */}
+                {exportSuccess && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">{exportSuccess.message}</p>
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 font-mono">
+                        Saved: {exportSuccess.filename} • {exportSuccess.totalMeetings} meeting{exportSuccess.totalMeetings === 1 ? '' : 's'} • {exportSuccess.totalActionItems} action item{exportSuccess.totalActionItems === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Export Error Message */}
+                {exportError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 flex items-start gap-2.5 text-xs text-rose-800 dark:text-rose-300">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">Export Failed</p>
+                      <p className="text-[11px] text-rose-700 dark:text-rose-400 mt-0.5">{exportError}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Upcoming Capabilities (Roadmap) */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
             <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
@@ -486,7 +806,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Custom Model Selection</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2B</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Switch between Gemini 2.5 Flash, Gemini 2.5 Pro, or bring your own API key.
@@ -498,7 +818,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">PDF Export Formatting & Branding</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2C</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Custom corporate branding, layout density, and executive summary styles.
@@ -509,11 +829,11 @@ export const Settings: React.FC<SettingsProps> = ({
               <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Data Management & Account Erasure</span>
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Account Erasure & Bulk Deletion</span>
                     <span className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800/60 px-1.5 py-0.5 rounded">Phase 3</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Bulk export meeting history as JSON/CSV and complete account data erasure.
+                    Permanently delete all meeting history and complete GDPR account erasure.
                   </p>
                 </div>
               </div>

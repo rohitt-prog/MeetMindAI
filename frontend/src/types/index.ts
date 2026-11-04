@@ -104,6 +104,30 @@ export interface MeetingDeleteResponse {
   message?: string;
 }
 
+export interface BackupUserSummary {
+  uid: string;
+  email: string | null;
+  is_demo_user: boolean;
+}
+
+export interface BackupMetrics {
+  total_meetings: number;
+  total_action_items: number;
+  total_decisions: number;
+  is_complete: boolean;
+  api_limit_reached: boolean;
+  retrieval_note: string;
+}
+
+export interface MeetingBackupPayload {
+  version: string;
+  backup_type: string;
+  exported_at: string;
+  user: BackupUserSummary;
+  metrics: BackupMetrics;
+  meetings: MeetingDetailResponse[];
+}
+
 export interface AnalysisState {
   isLoading: boolean;
   isClarifying: boolean;
