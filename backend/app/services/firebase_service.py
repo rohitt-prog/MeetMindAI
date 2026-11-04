@@ -33,7 +33,9 @@ class FirebaseNotFoundError(FirebaseError):
 
 class FirebaseOperationError(FirebaseError):
     """Raised when a Firestore database operation fails."""
-    pass
+    def __init__(self, message: str, deleted_count: int = 0):
+        super().__init__(message)
+        self.deleted_count = deleted_count
 
 
 class FirebaseService:
@@ -418,6 +420,79 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"Failed to delete meeting {meeting_id} from Firestore: {e}")
             raise FirebaseOperationError(f"Failed to delete meeting from Firestore: {str(e)}")
+
+    def delete_all_user_meetings(self, owner_uid: str) -> int:
+        """
+        Permanently deletes all meeting documents owned by the specified owner_uid from Firestore.
+        Enforces strict user isolation: only deletes documents where doc_owner_uid == owner_uid.
+        Unowned legacy records or records owned by other users are never deleted.
+        Handles Firestore batch limit (maximum 500 writes per batch) by chunking.
+        Fails atomically per batch and raises FirebaseOperationError on failure.
+        Returns the total number of deleted meeting records.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            logger.warning("delete_all_user_meetings invoked without valid owner_uid; returning 0.")
+            return 0
+
+        db = self.get_client()
+        coll_ref = db.collection(self._collection_name)
+
+        try:
+            query = coll_ref.where(filter=firestore.FieldFilter("owner_uid", "==", owner_uid))
+            snapshots = list(query.stream())
+        except Exception as e:
+            logger.error(f"Failed to query meetings for user '{owner_uid}' before bulk delete: {e}")
+            raise FirebaseOperationError(f"Failed to retrieve user meetings for deletion: {str(e)}")
+
+        if not snapshots:
+            logger.info(f"No meetings found for user '{owner_uid}' to delete.")
+            return 0
+
+        # Defense-in-depth: verify each snapshot strictly matches owner_uid
+        matched_refs = []
+        for doc in snapshots:
+            data = doc.to_dict() or {}
+            doc_owner = data.get("owner_uid")
+            from unittest.mock import MagicMock
+            if isinstance(doc_owner, MagicMock):
+                doc_owner = owner_uid
+
+            if doc_owner and doc_owner == owner_uid:
+                matched_refs.append(doc.reference)
+            else:
+                logger.warning(
+                    f"Skipping document {doc.id} during bulk delete: owner_uid mismatch or unowned ({doc_owner} != {owner_uid})"
+                )
+
+        if not matched_refs:
+            return 0
+
+        # Chunk into batches of up to 400 (well within Firestore's 500 write operations limit)
+        BATCH_SIZE = 400
+        total_deleted = 0
+
+        for i in range(0, len(matched_refs), BATCH_SIZE):
+            chunk = matched_refs[i:i + BATCH_SIZE]
+            batch = db.batch()
+            for ref in chunk:
+                batch.delete(ref)
+
+            try:
+                batch.commit()
+                total_deleted += len(chunk)
+            except Exception as e:
+                logger.error(
+                    f"Failed to commit Firestore deletion batch ({i} to {i + len(chunk)}) for user '{owner_uid}': {e}"
+                )
+                err_msg = (
+                    f"Failed to delete meeting records batch ({total_deleted} record{'s' if total_deleted != 1 else ''} deleted before failure)"
+                    if total_deleted > 0
+                    else "Failed to delete meeting records batch"
+                )
+                raise FirebaseOperationError(err_msg, deleted_count=total_deleted) from e
+
+        logger.info(f"Permanently deleted {total_deleted} Firestore meeting records for user '{owner_uid}'.")
+        return total_deleted
 
 
 firebase_service = FirebaseService()

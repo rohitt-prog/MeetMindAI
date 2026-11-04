@@ -10,6 +10,7 @@ from app.schemas.meeting import (
     MeetingAnalysisResponse,
     MeetingClarificationRequest,
     MeetingDeleteResponse,
+    BulkMeetingDeleteResponse,
     MeetingDetailResponse,
     MeetingListItem,
     MeetingPdfExportRequest,
@@ -292,6 +293,58 @@ def get_meeting_details(
         )
     except Exception as e:
         logger.exception(f"Unexpected error retrieving meeting '{clean_id}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal server error occurred while processing your request. Please try again later.",
+        )
+
+
+@router.delete(
+    "",
+    response_model=BulkMeetingDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete All Saved Meetings for Current User",
+    description="Permanently deletes all Cloud Firestore meeting documents owned by the authenticated user. Enforces strict user isolation.",
+)
+def delete_all_user_meetings(
+    current_user: AuthenticatedUser = Depends(require_rate_limit("bulk_delete", lambda: settings.RATE_LIMIT_BULK_DELETE)),
+) -> BulkMeetingDeleteResponse:
+    """
+    Endpoint to permanently delete all saved meetings owned by the authenticated user.
+    """
+    if not firebase_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase Firestore is not configured. Please configure FIREBASE_PROJECT_ID and credentials in backend/.env.",
+        )
+
+    try:
+        deleted_count = firebase_service.delete_all_user_meetings(owner_uid=current_user.uid)
+        return BulkMeetingDeleteResponse(
+            status="deleted",
+            deleted_count=deleted_count,
+            message=f"Successfully deleted {deleted_count} saved meeting{'s' if deleted_count != 1 else ''}.",
+        )
+    except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in delete_all_user_meetings: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
+        )
+    except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in delete_all_user_meetings: {e}")
+        deleted_count = getattr(e, "deleted_count", 0)
+        prod_msg = (
+            f"The upstream database service is temporarily unavailable. {deleted_count} record{'s were' if deleted_count != 1 else ' was'} deleted before failure. Please retry to delete remaining records."
+            if deleted_count > 0
+            else "The upstream database service is temporarily unavailable. Please try again."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, prod_msg),
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error in delete_all_user_meetings for user '{current_user.uid}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal server error occurred while processing your request. Please try again later.",

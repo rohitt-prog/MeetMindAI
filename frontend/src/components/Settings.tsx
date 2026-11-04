@@ -19,6 +19,7 @@ import {
   Sliders,
   Database,
   Download,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BackendConnectionState, ThemeMode, MeetingListItem } from '../types';
@@ -28,12 +29,14 @@ import {
   calculateBackupMetrics,
   API_MAX_MEETING_LIMIT,
 } from '../services/backupService';
+import { BulkDeleteMeetingsModal } from './BulkDeleteMeetingsModal';
 
 interface SettingsProps {
   connectionState: BackendConnectionState;
   onRefreshHealth: () => void;
   themeMode: ThemeMode;
   onSelectThemeMode: (mode: ThemeMode) => void;
+  onRefreshMeetings?: () => void;
 }
 
 export const Settings: React.FC<SettingsProps> = ({
@@ -41,6 +44,7 @@ export const Settings: React.FC<SettingsProps> = ({
   onRefreshHealth,
   themeMode,
   onSelectThemeMode,
+  onRefreshMeetings,
 }) => {
   const { user, logout, updateDisplayName, sendPasswordReset } = useAuth();
 
@@ -181,6 +185,47 @@ export const Settings: React.FC<SettingsProps> = ({
     } finally {
       setIsExporting(false);
       setExportProgress(null);
+    }
+  };
+
+  // Bulk Delete state
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState<boolean>(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState<boolean>(false);
+  const [bulkDeleteModalError, setBulkDeleteModalError] = useState<string | null>(null);
+  const [bulkDeleteSuccessMessage, setBulkDeleteSuccessMessage] = useState<string | null>(null);
+
+  const refreshMeetingData = async () => {
+    try {
+      await loadSummary();
+    } catch {
+      // Ignore refresh error to avoid masking primary deletion error or outcome
+    }
+    try {
+      await onRefreshMeetings?.();
+    } catch {
+      // Ignore parent callback error
+    }
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (!user || isBulkDeleting) return;
+    setIsBulkDeleting(true);
+    setBulkDeleteModalError(null);
+    setBulkDeleteSuccessMessage(null);
+
+    try {
+      const response = await apiService.deleteAllMeetings();
+      setBulkDeleteSuccessMessage(
+        `Successfully deleted ${response.deleted_count} saved meeting${response.deleted_count === 1 ? '' : 's'}.`
+      );
+      setIsBulkDeleteModalOpen(false);
+      await refreshMeetingData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete meetings. Please try again.';
+      setBulkDeleteModalError(msg);
+      await refreshMeetingData();
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -782,6 +827,47 @@ export const Settings: React.FC<SettingsProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Destructive Action: Delete All Meetings */}
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete All Saved Meetings</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Permanently delete all meeting transcripts and analysis records. Your account login is preserved.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkDeleteModalError(null);
+                      setIsBulkDeleteModalOpen(true);
+                    }}
+                    disabled={isBulkDeleting || isExporting || isLoadingSummary || (meetingsSummary !== null && meetingsSummary.length === 0)}
+                    className="px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-400 font-medium text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete All Meetings...</span>
+                  </button>
+                </div>
+
+                {/* Bulk Delete Success Notification */}
+                {bulkDeleteSuccessMessage && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">{bulkDeleteSuccessMessage}</p>
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                        Your meeting repository has been reset. All intelligence metrics now show zero.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -806,7 +892,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Custom Model Selection</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2B</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2C</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Switch between Gemini 2.5 Flash, Gemini 2.5 Pro, or bring your own API key.
@@ -818,7 +904,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">PDF Export Formatting & Branding</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2C</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2D</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Custom corporate branding, layout density, and executive summary styles.
@@ -829,11 +915,11 @@ export const Settings: React.FC<SettingsProps> = ({
               <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Account Erasure & Bulk Deletion</span>
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Complete Account Erasure</span>
                     <span className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800/60 px-1.5 py-0.5 rounded">Phase 3</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Permanently delete all meeting history and complete GDPR account erasure.
+                    Permanent GDPR user profile erasure and Firebase authentication account termination.
                   </p>
                 </div>
               </div>
@@ -954,6 +1040,12 @@ export const Settings: React.FC<SettingsProps> = ({
                       20 / min
                     </span>
                   </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-950/40 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">Bulk Meeting Deletion</span>
+                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+                      5 / min
+                    </span>
+                  </div>
                 </div>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
                   Enforced per authenticated user on the FastAPI backend using sliding-window rate limiters.
@@ -963,6 +1055,22 @@ export const Settings: React.FC<SettingsProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <BulkDeleteMeetingsModal
+        isOpen={isBulkDeleteModalOpen}
+        onClose={() => {
+          if (!isBulkDeleting) {
+            setIsBulkDeleteModalOpen(false);
+            setBulkDeleteModalError(null);
+          }
+        }}
+        onConfirm={handleConfirmBulkDelete}
+        isDeleting={isBulkDeleting}
+        meetingCount={metrics.total_meetings}
+        error={bulkDeleteModalError}
+        onExportBackup={handleExportBackup}
+      />
     </div>
   );
 };

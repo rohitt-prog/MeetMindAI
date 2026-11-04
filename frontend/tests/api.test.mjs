@@ -378,6 +378,57 @@ class ApiServiceTestClient {
     }
   }
 
+  async deleteAllMeetings() {
+    const url = `${this.baseUrl}/api/meetings`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to delete all meetings (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Bulk delete request timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to delete all meetings.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while deleting all meetings.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async exportMeetingPdf(request) {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
@@ -1801,6 +1852,310 @@ describe('Frontend API Service & State Integration Tests', () => {
       };
 
       assert.throws(() => runExport(list), /No saved meetings found to export/);
+    });
+  });
+
+  describe('Phase 2B Bulk Meeting Deletion', () => {
+    const CONFIRMATION_PHRASE = 'DELETE ALL MEETINGS';
+
+    const validateConfirmationPhrase = (input) => {
+      return (input || '').trim() === CONFIRMATION_PHRASE;
+    };
+
+    const isDeleteActionDisabled = ({ isDeleting, phraseInput, meetingCount }) => {
+      if (isDeleting) return true;
+      if (!validateConfirmationPhrase(phraseInput)) return true;
+      if (meetingCount === 0) return true;
+      return false;
+    };
+
+    it('Confirmation phrase validation: strictly requires exact match DELETE ALL MEETINGS', () => {
+      assert.equal(validateConfirmationPhrase('DELETE ALL MEETINGS'), true);
+      assert.equal(validateConfirmationPhrase('  DELETE ALL MEETINGS  '), true, 'Trimmed match is acceptable');
+      assert.equal(validateConfirmationPhrase('delete all meetings'), false, 'Case-sensitive match required');
+      assert.equal(validateConfirmationPhrase('DELETE ALL'), false, 'Partial phrase rejected');
+      assert.equal(validateConfirmationPhrase('DELETE ALL MEETING'), false, 'Typo rejected');
+      assert.equal(validateConfirmationPhrase(''), false, 'Empty input rejected');
+      assert.equal(validateConfirmationPhrase(null), false, 'Null rejected');
+    });
+
+    it('Disabled state: keeps destructive action disabled until exact phrase is entered', () => {
+      // Disabled while input is incomplete
+      assert.equal(
+        isDeleteActionDisabled({ isDeleting: false, phraseInput: 'DELETE', meetingCount: 5 }),
+        true
+      );
+
+      // Disabled when user has 0 meetings
+      assert.equal(
+        isDeleteActionDisabled({ isDeleting: false, phraseInput: 'DELETE ALL MEETINGS', meetingCount: 0 }),
+        true
+      );
+
+      // Disabled while deletion is actively in progress
+      assert.equal(
+        isDeleteActionDisabled({ isDeleting: true, phraseInput: 'DELETE ALL MEETINGS', meetingCount: 5 }),
+        true
+      );
+
+      // Enabled only when phrase matches, not deleting, and meetings > 0
+      assert.equal(
+        isDeleteActionDisabled({ isDeleting: false, phraseInput: 'DELETE ALL MEETINGS', meetingCount: 5 }),
+        false
+      );
+    });
+
+    it('Successful bulk deletion: calls DELETE /api/meetings and returns deleted count', async () => {
+      let capturedMethod = null;
+      let capturedUrl = null;
+
+      globalThis.fetch = async (url, options) => {
+        capturedMethod = options.method;
+        capturedUrl = url;
+        return new Response(
+          JSON.stringify({
+            status: 'deleted',
+            deleted_count: 7,
+            message: 'Successfully deleted 7 saved meetings.',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const result = await client.deleteAllMeetings();
+      assert.equal(capturedMethod, 'DELETE');
+      assert.ok(capturedUrl.endsWith('/api/meetings'));
+      assert.equal(result.status, 'deleted');
+      assert.equal(result.deleted_count, 7);
+      assert.match(result.message, /successfully deleted 7 saved meetings/i);
+    });
+
+    it('API failure feedback: surfaces backend error detail clearly on 502/503 failure', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: 'The upstream database service is temporarily unavailable. Please try again.',
+          }),
+          { status: 502, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      await assert.rejects(
+        async () => client.deleteAllMeetings(),
+        /upstream database service is temporarily unavailable/
+      );
+    });
+
+    it('Preventing duplicate submissions: rejects concurrent calls while execution is in-flight', async () => {
+      let isDeleting = false;
+      let callCount = 0;
+
+      const performSafeBulkDelete = async () => {
+        if (isDeleting) {
+          throw new Error('Deletion already in progress. Duplicate submission prevented.');
+        }
+        isDeleting = true;
+        try {
+          callCount++;
+          await new Promise((r) => setTimeout(r, 20));
+          return { status: 'deleted', deleted_count: 3 };
+        } finally {
+          isDeleting = false;
+        }
+      };
+
+      // Start first deletion
+      const firstCall = performSafeBulkDelete();
+      // Concurrent second submission must be blocked
+      await assert.rejects(
+        async () => performSafeBulkDelete(),
+        /Deletion already in progress/
+      );
+
+      const result = await firstCall;
+      assert.equal(result.deleted_count, 3);
+      assert.equal(callCount, 1, 'Only one delete execution must occur');
+    });
+
+    it('Rate limiting: handles HTTP 429 and extracts Retry-After header cleanly', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: 'Rate limit exceeded for endpoint bulk_delete. Maximum 5 requests per minute allowed.',
+          }),
+          {
+            status: 429,
+            headers: {
+              'Content-Type': 'application/json',
+              'Retry-After': '45',
+            },
+          }
+        );
+      };
+
+      await assert.rejects(
+        async () => client.deleteAllMeetings(),
+        /Rate limit exceeded\. Please wait 45 seconds before trying again\./
+      );
+    });
+
+    it('Partial failure refresh: awaits metrics and history refresh when deletion fails', async () => {
+      let isBulkDeleting = false;
+      let bulkDeleteModalError = null;
+      let bulkDeleteSuccessMessage = null;
+      let isBulkDeleteModalOpen = true;
+      let summaryRefreshed = false;
+      let historyRefreshed = false;
+      const user = { uid: 'test-user-123' };
+
+      const fakeLoadSummary = async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        summaryRefreshed = true;
+      };
+
+      const fakeOnRefreshMeetings = async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        historyRefreshed = true;
+      };
+
+      const refreshMeetingData = async () => {
+        try {
+          await fakeLoadSummary();
+        } catch {
+          // Ignore refresh error to avoid masking primary deletion error or outcome
+        }
+        try {
+          await fakeOnRefreshMeetings();
+        } catch {
+          // Ignore parent callback error
+        }
+      };
+
+      const setIsBulkDeleting = (val) => { isBulkDeleting = val; };
+      const setBulkDeleteModalError = (val) => { bulkDeleteModalError = val; };
+      const setBulkDeleteSuccessMessage = (val) => { bulkDeleteSuccessMessage = val; };
+
+      const handleConfirmBulkDelete = async () => {
+        if (!user || isBulkDeleting) return;
+        setIsBulkDeleting(true);
+        setBulkDeleteModalError(null);
+        setBulkDeleteSuccessMessage(null);
+
+        try {
+          // Simulated backend failure during batch 2 after batch 1 succeeded
+          throw new Error('Failed to delete meeting records batch (400 records deleted before failure)');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to delete meetings. Please try again.';
+          setBulkDeleteModalError(msg);
+          await refreshMeetingData();
+        } finally {
+          setIsBulkDeleting(false);
+        }
+      };
+
+      await handleConfirmBulkDelete();
+
+      // Verify outcomes:
+      assert.equal(isBulkDeleting, false, 'Loading state must reset to false');
+      assert.equal(isBulkDeleteModalOpen, true, 'Modal must remain open on failure');
+      assert.equal(bulkDeleteSuccessMessage, null);
+      assert.equal(
+        bulkDeleteModalError,
+        'Failed to delete meeting records batch (400 records deleted before failure)'
+      );
+      assert.equal(summaryRefreshed, true, 'Meeting summary metrics must be refreshed');
+      assert.equal(historyRefreshed, true, 'History/workspace list must be refreshed');
+    });
+
+    it('Refresh error isolation: original deletion error remains visible even if refresh throws', async () => {
+      let isBulkDeleting = false;
+      let bulkDeleteModalError = null;
+      let summaryAttempted = false;
+      let historyAttempted = false;
+      const user = { uid: 'test-user-123' };
+
+      const fakeLoadSummaryThatFails = async () => {
+        summaryAttempted = true;
+        throw new Error('Summary fetch failed: network disconnected');
+      };
+
+      const fakeOnRefreshMeetingsThatFails = async () => {
+        historyAttempted = true;
+        throw new Error('Workspace list reload failed: component unmounted');
+      };
+
+      const refreshMeetingData = async () => {
+        try {
+          await fakeLoadSummaryThatFails();
+        } catch {
+          // Ignore refresh error to avoid masking primary deletion error or outcome
+        }
+        try {
+          await fakeOnRefreshMeetingsThatFails();
+        } catch {
+          // Ignore parent callback error
+        }
+      };
+
+      const handleConfirmBulkDelete = async () => {
+        if (!user || isBulkDeleting) return;
+        isBulkDeleting = true;
+        bulkDeleteModalError = null;
+
+        try {
+          throw new Error('Upstream database timeout during batch commit (200 records deleted before failure)');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to delete meetings. Please try again.';
+          bulkDeleteModalError = msg;
+          await refreshMeetingData();
+        } finally {
+          isBulkDeleting = false;
+        }
+      };
+
+      await handleConfirmBulkDelete();
+
+      assert.equal(isBulkDeleting, false);
+      assert.equal(summaryAttempted, true);
+      assert.equal(historyAttempted, true);
+      // Crucial: The primary deletion error must NOT be overwritten by the refresh failures
+      assert.equal(
+        bulkDeleteModalError,
+        'Upstream database timeout during batch commit (200 records deleted before failure)'
+      );
+    });
+
+    it('Duplicate submission prevention in Settings: ignores second click while deletion is active', async () => {
+      let isBulkDeleting = false;
+      let apiCallCount = 0;
+      const user = { uid: 'test-user-123' };
+
+      const fakeApiDelete = async () => {
+        apiCallCount++;
+        await new Promise((r) => setTimeout(r, 30));
+        return { status: 'deleted', deleted_count: 5 };
+      };
+
+      const handleConfirmBulkDelete = async () => {
+        if (!user || isBulkDeleting) return;
+        isBulkDeleting = true;
+
+        try {
+          await fakeApiDelete();
+        } finally {
+          isBulkDeleting = false;
+        }
+      };
+
+      // Trigger first execution
+      const run1 = handleConfirmBulkDelete();
+      // Concurrent second trigger while isBulkDeleting is true
+      const run2 = handleConfirmBulkDelete();
+
+      await Promise.all([run1, run2]);
+
+      assert.equal(apiCallCount, 1, 'Duplicate click must be ignored while in-flight');
+      assert.equal(isBulkDeleting, false, 'Loading state must be cleared after completion');
     });
   });
 });

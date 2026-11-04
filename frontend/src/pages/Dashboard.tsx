@@ -165,6 +165,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 onRefreshHealth={onRefreshHealth}
                 themeMode={themeMode}
                 onSelectThemeMode={onSelectThemeMode || (() => {})}
+                onRefreshMeetings={onRefreshMeetings}
               />
             </motion.div>
           ) : (

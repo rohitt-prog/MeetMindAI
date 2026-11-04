@@ -86,6 +86,7 @@ def create_mock_firestore_client(existing_docs=None):
             mock_doc.set.side_effect = mock_set
             mock_doc.update.side_effect = mock_update
             mock_doc.delete.side_effect = mock_delete
+            mock_doc.id = doc_id
             return mock_doc
 
         def mock_order_by(field, direction=None):
@@ -141,6 +142,7 @@ def create_mock_firestore_client(existing_docs=None):
                         snap.exists = True
                         snap.id = doc_id
                         snap.to_dict.return_value = doc_data
+                        snap.reference = mock_document(doc_id)
                         docs.append(snap)
                 return docs
 
@@ -150,6 +152,24 @@ def create_mock_firestore_client(existing_docs=None):
         mock_col.where.side_effect = mock_where
         return mock_col
 
+    def mock_batch():
+        batch_mock = MagicMock()
+        pending_deletes = []
+
+        def batch_delete(ref):
+            pending_deletes.append(ref)
+
+        def batch_commit():
+            for ref in pending_deletes:
+                doc_id = getattr(ref, "id", None)
+                if doc_id and doc_id in existing_docs:
+                    del existing_docs[doc_id]
+
+        batch_mock.delete.side_effect = batch_delete
+        batch_mock.commit.side_effect = batch_commit
+        return batch_mock
+
+    mock_db.batch.side_effect = mock_batch
     mock_db.collection.side_effect = mock_collection
     return mock_db
 
@@ -600,5 +620,330 @@ def test_export_pdf_after_delete_returns_404():
         post_res = client.get("/api/meetings/m_to_delete_pdf/export/pdf")
         assert post_res.status_code == 404
         assert "not found" in post_res.json()["detail"].lower()
+    finally:
+        firebase_service._client = orig_client
+
+# ==============================================================================
+# Phase 2B Bulk Deletion Tests
+# ==============================================================================
+
+
+def test_bulk_delete_deletes_only_authenticated_user_records():
+    """
+    Test that DELETE /api/meetings deletes only records owned by the current user,
+    leaving other users' records and unowned legacy records completely intact.
+    """
+    docs = {
+        "m_user1_a": {
+            "meeting_id": "m_user1_a",
+            "owner_uid": "test_user_default",
+            "title": "Meeting 1A",
+            "transcript": "Transcript 1A",
+        },
+        "m_user1_b": {
+            "meeting_id": "m_user1_b",
+            "owner_uid": "test_user_default",
+            "title": "Meeting 1B",
+            "transcript": "Transcript 1B",
+        },
+        "m_user2": {
+            "meeting_id": "m_user2",
+            "owner_uid": "other_user_456",
+            "title": "User 2 Meeting",
+            "transcript": "Private Transcript 2",
+        },
+        "m_legacy_unowned": {
+            "meeting_id": "m_legacy_unowned",
+            "owner_uid": None,
+            "title": "Unowned Legacy Meeting",
+            "transcript": "Legacy Transcript",
+        },
+    }
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "deleted"
+        assert data["deleted_count"] == 2
+        assert "successfully deleted 2 saved meetings" in data["message"].lower()
+
+        # Verify current user's records were deleted
+        assert "m_user1_a" not in docs
+        assert "m_user1_b" not in docs
+
+        # Verify other user's record and unowned legacy records are intact
+        assert "m_user2" in docs
+        assert "m_legacy_unowned" in docs
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_leaves_unowned_records_untouched():
+    """
+    Test that DELETE /api/meetings does not delete unowned legacy records when the user
+    has no matching meetings.
+    """
+    docs = {
+        "m_unowned_1": {"meeting_id": "m_unowned_1", "owner_uid": None},
+        "m_unowned_2": {"meeting_id": "m_unowned_2", "owner_uid": ""},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_count"] == 0
+        assert "m_unowned_1" in docs
+        assert "m_unowned_2" in docs
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_empty_collection():
+    """
+    Test bulk delete on an empty Firestore collection returns deleted_count=0.
+    """
+    mock_db = create_mock_firestore_client({})
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_count"] == 0
+        assert data["status"] == "deleted"
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_batch_boundaries_and_multiple_batches():
+    """
+    Test that delete_all_user_meetings properly chunks documents across batch boundaries
+    when document count exceeds BATCH_SIZE (400).
+    """
+    TOTAL_DOCS = 450
+    docs = {
+        f"m_batch_{i}": {
+            "meeting_id": f"m_batch_{i}",
+            "owner_uid": "test_user_default",
+            "title": f"Batch Meeting {i}",
+        }
+        for i in range(TOTAL_DOCS)
+    }
+
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        deleted_count = firebase_service.delete_all_user_meetings("test_user_default")
+        assert deleted_count == TOTAL_DOCS
+        assert len(docs) == 0
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_fails_safely_on_batch_error():
+    """
+    Test that if a Firestore batch commit fails, delete_all_user_meetings raises
+    FirebaseOperationError and does not report false success.
+    """
+    docs = {
+        "m_err_1": {"meeting_id": "m_err_1", "owner_uid": "test_user_default"},
+        "m_err_2": {"meeting_id": "m_err_2", "owner_uid": "test_user_default"},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    # Simulate batch commit failure by overriding side_effect
+    mock_batch_instance = MagicMock()
+    mock_batch_instance.commit.side_effect = Exception("Firestore transaction timeout")
+    mock_db.batch.side_effect = None
+    mock_db.batch.return_value = mock_batch_instance
+
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        with pytest.raises(FirebaseOperationError) as exc_info:
+            firebase_service.delete_all_user_meetings("test_user_default")
+        assert "Failed to delete meeting records batch" in str(exc_info.value)
+    finally:
+        firebase_service._client = orig_client
+
+def test_bulk_delete_enforces_authentication():
+    """
+    Test that DELETE /api/meetings returns 401 Unauthorized when unauthenticated.
+    """
+    from app.core.auth import get_current_user
+    orig_override = app.dependency_overrides.pop(get_current_user, None)
+
+    try:
+        response = client.delete("/api/meetings")
+        assert response.status_code == 401
+        assert "authentication required" in response.json()["detail"].lower()
+    finally:
+        if orig_override:
+            app.dependency_overrides[get_current_user] = orig_override
+
+
+def test_bulk_delete_enforces_rate_limiting():
+    """
+    Test that DELETE /api/meetings enforces the 5/minute rate limit.
+    """
+    mock_db = create_mock_firestore_client({})
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        # First 5 requests should succeed
+        for _ in range(5):
+            res = client.delete("/api/meetings")
+            assert res.status_code == 200
+
+        # 6th request within the minute window must trigger 429 Too Many Requests
+        rate_limited_res = client.delete("/api/meetings")
+        assert rate_limited_res.status_code == 429
+        assert "rate limit exceeded" in rate_limited_res.json()["detail"].lower()
+        assert "Retry-After" in rate_limited_res.headers
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_partial_failure_after_first_batch_succeeds():
+    """
+    Test bulk delete partial failure:
+    Simulates 450 user-owned records chunked into Batch 1 (400 records) and Batch 2 (50 records).
+    Batch 1 commits successfully, but Batch 2 raises an exception.
+    Verifies:
+      1. FirebaseOperationError is raised with deleted_count=400.
+      2. The error message indicates 400 records deleted before failure.
+      3. Original exception is preserved on __cause__.
+      4. The 400 records from Batch 1 are deleted, and surviving 50 records remain in the database.
+      5. Subsequent retry executes and successfully deletes the remaining 50 records.
+    """
+    owner_uid = "test_user_partial_fail"
+    docs = {
+        f"m_batch_{i}": {
+            "meeting_id": f"m_batch_{i}",
+            "owner_uid": owner_uid,
+            "title": f"Meeting {i}",
+        }
+        for i in range(450)
+    }
+
+    mock_db = create_mock_firestore_client(docs)
+
+    commit_count = 0
+
+    def mock_batch_with_second_batch_failure():
+        batch_mock = MagicMock()
+        pending_deletes = []
+
+        def batch_delete(ref):
+            pending_deletes.append(ref)
+
+        def batch_commit():
+            nonlocal commit_count
+            commit_count += 1
+            if commit_count == 2:
+                raise Exception("Simulated Firestore timeout on second batch")
+            for ref in pending_deletes:
+                doc_id = getattr(ref, "id", None)
+                if doc_id and doc_id in docs:
+                    del docs[doc_id]
+
+        batch_mock.delete.side_effect = batch_delete
+        batch_mock.commit.side_effect = batch_commit
+        return batch_mock
+
+    mock_db.batch.side_effect = mock_batch_with_second_batch_failure
+
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        # First attempt: Batch 1 (400) commits, Batch 2 (50) fails
+        with pytest.raises(FirebaseOperationError) as exc_info:
+            firebase_service.delete_all_user_meetings(owner_uid)
+
+        assert exc_info.value.deleted_count == 400
+        assert "400 records deleted before failure" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+        assert "Simulated Firestore timeout on second batch" in str(exc_info.value.__cause__)
+
+        # Verify 400 records deleted, 50 surviving records remain
+        assert len(docs) == 50
+        for i in range(400):
+            assert f"m_batch_{i}" not in docs
+        for i in range(400, 450):
+            assert f"m_batch_{i}" in docs
+
+        # Subsequent retry: commits remaining 50 records (commit_count becomes 3 != 2)
+        retry_deleted = firebase_service.delete_all_user_meetings(owner_uid)
+        assert retry_deleted == 50
+        assert len(docs) == 0
+
+        # Further retry returns 0 deleted safely
+        empty_retry = firebase_service.delete_all_user_meetings(owner_uid)
+        assert empty_retry == 0
+    finally:
+        firebase_service._client = orig_client
+
+
+def test_bulk_delete_endpoint_reports_partial_progress_safely():
+    """
+    Test that the DELETE /api/meetings endpoint returns HTTP 502 with sanitized
+    information about how many records were deleted prior to upstream failure.
+    """
+    owner_uid = "test_user_default"
+    docs = {
+        f"m_part_{i}": {
+            "meeting_id": f"m_part_{i}",
+            "owner_uid": owner_uid,
+            "title": f"Meeting {i}",
+        }
+        for i in range(450)
+    }
+    mock_db = create_mock_firestore_client(docs)
+    commit_count = 0
+
+    def mock_batch_failure():
+        batch_mock = MagicMock()
+        pending_deletes = []
+
+        def batch_delete(ref):
+            pending_deletes.append(ref)
+
+        def batch_commit():
+            nonlocal commit_count
+            commit_count += 1
+            if commit_count == 2:
+                raise Exception("Internal connection reset")
+            for ref in pending_deletes:
+                doc_id = getattr(ref, "id", None)
+                if doc_id and doc_id in docs:
+                    del docs[doc_id]
+
+        batch_mock.delete.side_effect = batch_delete
+        batch_mock.commit.side_effect = batch_commit
+        return batch_mock
+
+    mock_db.batch.side_effect = mock_batch_failure
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    try:
+        response = client.delete("/api/meetings")
+        assert response.status_code == 502
+        data = response.json()
+        assert "400 records deleted before failure" in data["detail"]
+        assert len(docs) == 50
     finally:
         firebase_service._client = orig_client

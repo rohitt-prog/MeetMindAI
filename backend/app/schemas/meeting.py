@@ -214,3 +214,8 @@ class MeetingDeleteResponse(BaseModel):
     meeting_id: str = Field(..., description="Unique meeting ID of the deleted meeting")
     message: str = Field(default="Meeting successfully deleted.", description="Human-readable outcome message")
 
+class BulkMeetingDeleteResponse(BaseModel):
+    status: str = Field(default="deleted", description="Operation status indicator")
+    deleted_count: int = Field(..., description="Total number of meeting documents permanently deleted")
+    message: str = Field(default="All saved meetings have been permanently deleted.", description="Human-readable outcome message")
+

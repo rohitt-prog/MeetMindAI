@@ -4,6 +4,7 @@ import {
   MeetingAnalysisResponse,
   MeetingClarificationRequest,
   MeetingDeleteResponse,
+  BulkMeetingDeleteResponse,
   MeetingListItem,
   MeetingDetailResponse,
   MeetingPdfExportRequest,
@@ -487,6 +488,61 @@ class ApiService {
         throw err;
       }
       throw new Error(`An unexpected error occurred while deleting meeting '${meetingId}'.`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Permanently delete all saved meetings owned by the authenticated user from Firestore.
+   * Calls DELETE /api/meetings
+   */
+  async deleteAllMeetings(): Promise<BulkMeetingDeleteResponse> {
+    const url = `${this.baseUrl}/api/meetings`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to delete all meetings (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as BulkMeetingDeleteResponse;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Bulk delete request timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to delete all meetings.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while deleting all meetings.');
     } finally {
       clearTimeout(timeoutId);
     }
