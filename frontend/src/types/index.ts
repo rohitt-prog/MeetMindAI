@@ -110,6 +110,12 @@ export interface BulkMeetingDeleteResponse {
   message: string;
 }
 
+export interface AccountDeleteResponse {
+  status: 'deleted';
+  meetings_deleted: number;
+  message: string;
+}
+
 export interface BackupUserSummary {
   uid: string;
   email: string | null;

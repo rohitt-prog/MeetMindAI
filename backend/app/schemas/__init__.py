@@ -1,5 +1,6 @@
 """Pydantic schemas for MeetMind AI."""
 from app.schemas.health import HealthResponse
+from app.schemas.account import AccountDeleteResponse
 from app.schemas.meeting import (
     ActionItem,
     ClarificationItem,
@@ -11,6 +12,7 @@ from app.schemas.meeting import (
 
 __all__ = [
     "HealthResponse",
+    "AccountDeleteResponse",
     "ActionItem",
     "ClarificationItem",
     "ClarificationAnswer",

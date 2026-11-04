@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_CLARIFY: str = "10/minute"
     RATE_LIMIT_PDF: str = "20/minute"
     RATE_LIMIT_BULK_DELETE: str = "5/minute"
+    RATE_LIMIT_ACCOUNT_DELETE: str = "5/minute"
     RATE_LIMIT_REDIS_URL: Optional[str] = None
     RATE_LIMIT_FAIL_CLOSED: Optional[bool] = None
     RATE_LIMIT_REDIS_REQUIRED: bool = False

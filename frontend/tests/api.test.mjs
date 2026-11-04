@@ -429,6 +429,57 @@ class ApiServiceTestClient {
     }
   }
 
+  async deleteAccount() {
+    const url = `${this.baseUrl}/api/account`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to delete account (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Account deletion request timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to delete account.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while deleting the account.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async exportMeetingPdf(request) {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
@@ -2156,6 +2207,260 @@ describe('Frontend API Service & State Integration Tests', () => {
 
       assert.equal(apiCallCount, 1, 'Duplicate click must be ignored while in-flight');
       assert.equal(isBulkDeleting, false, 'Loading state must be cleared after completion');
+    });
+  });
+
+  describe('Phase 3 Account Deletion', () => {
+    const CONFIRMATION_PHRASE = 'DELETE MY ACCOUNT';
+
+    it('Confirmation phrase validation: strictly requires exact match DELETE MY ACCOUNT', () => {
+      const isDeleteAccountDisabled = ({ isDeleting, phraseInput }) => {
+        const isConfirmed = (phraseInput || '').trim() === CONFIRMATION_PHRASE;
+        return !isConfirmed || isDeleting;
+      };
+
+      // Empty input
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: '' }), true);
+      // Partial input
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: 'DELETE' }), true);
+      // Case-insensitive mismatch
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: 'delete my account' }), true);
+      // Accidental bulk delete phrase
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: 'DELETE ALL MEETINGS' }), true);
+      // Matching phrase with whitespace padding
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: '  DELETE MY ACCOUNT  ' }), false);
+      // Exact matching phrase
+      assert.equal(isDeleteAccountDisabled({ isDeleting: false, phraseInput: 'DELETE MY ACCOUNT' }), false);
+      // Disabled while deleting even if phrase matches
+      assert.equal(isDeleteAccountDisabled({ isDeleting: true, phraseInput: 'DELETE MY ACCOUNT' }), true);
+    });
+
+    it('Successful account deletion: calls DELETE /api/account, closes modal, and invokes logout', async () => {
+      let isDeleteAccountModalOpen = true;
+      let isDeletingAccount = false;
+      let deleteAccountModalError = null;
+      let user = { uid: 'u_erase_123', email: 'user@meetmind.ai' };
+      let loggedOut = false;
+      let capturedMethod = null;
+      let capturedUrl = null;
+
+      globalThis.fetch = async (url, options) => {
+        capturedMethod = options.method;
+        capturedUrl = url;
+        return new Response(
+          JSON.stringify({
+            status: 'deleted',
+            meetings_deleted: 4,
+            message: 'User account and 4 meeting records permanently deleted.',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const fakeLogout = async () => {
+        loggedOut = true;
+        user = null;
+      };
+
+      const handleConfirmDeleteAccount = async () => {
+        if (!user || isDeletingAccount) return;
+        isDeletingAccount = true;
+        deleteAccountModalError = null;
+
+        try {
+          await client.deleteAccount();
+          isDeleteAccountModalOpen = false;
+          await fakeLogout();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to delete account. Please try again.';
+          deleteAccountModalError = msg;
+        } finally {
+          isDeletingAccount = false;
+        }
+      };
+
+      await handleConfirmDeleteAccount();
+
+      assert.equal(capturedMethod, 'DELETE');
+      assert.ok(capturedUrl.endsWith('/api/account'));
+      assert.equal(isDeleteAccountModalOpen, false, 'Modal must close on confirmed success');
+      assert.equal(loggedOut, true, 'Logout must be called on successful account deletion');
+      assert.equal(user, null, 'User state must be cleared');
+      assert.equal(deleteAccountModalError, null);
+      assert.equal(isDeletingAccount, false, 'Loading state must be reset to false');
+    });
+
+    it('Error handling and session preservation: surfaces backend failure, keeps modal open, preserves active session', async () => {
+      let isDeleteAccountModalOpen = true;
+      let isDeletingAccount = false;
+      let deleteAccountModalError = null;
+      let user = { uid: 'u_preserve_123', email: 'preserve@meetmind.ai' };
+      let logoutCalled = false;
+
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: 'The upstream database service is temporarily unavailable. 2 records were deleted before failure. Your authentication account was not deleted. Please retry to complete account deletion.',
+          }),
+          { status: 502, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const fakeLogout = async () => {
+        logoutCalled = true;
+        user = null;
+      };
+
+      const handleConfirmDeleteAccount = async () => {
+        if (!user || isDeletingAccount) return;
+        isDeletingAccount = true;
+        deleteAccountModalError = null;
+
+        try {
+          await client.deleteAccount();
+          isDeleteAccountModalOpen = false;
+          await fakeLogout();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to delete account. Please try again.';
+          deleteAccountModalError = msg;
+        } finally {
+          isDeletingAccount = false;
+        }
+      };
+
+      await handleConfirmDeleteAccount();
+
+      // Modal remains open so user can read error or retry
+      assert.equal(isDeleteAccountModalOpen, true, 'Modal must stay open on failure');
+      // User must NOT be logged out if deletion failed
+      assert.equal(logoutCalled, false, 'User must not be logged out if account deletion failed');
+      assert.ok(user !== null, 'Session must be preserved');
+      assert.match(deleteAccountModalError, /Your authentication account was not deleted/);
+      assert.equal(isDeletingAccount, false, 'Loading state must be cleared');
+    });
+
+    it('Duplicate submission prevention: blocks concurrent calls while deletion is in-flight', async () => {
+      let isDeletingAccount = false;
+      let apiCallCount = 0;
+      const user = { uid: 'u_dupe_123' };
+
+      const fakeApiDeleteAccount = async () => {
+        apiCallCount++;
+        await new Promise((r) => setTimeout(r, 25));
+        return { status: 'deleted', meetings_deleted: 1, message: 'Deleted' };
+      };
+
+      const handleConfirmDeleteAccount = async () => {
+        if (!user || isDeletingAccount) return;
+        isDeletingAccount = true;
+
+        try {
+          await fakeApiDeleteAccount();
+        } finally {
+          isDeletingAccount = false;
+        }
+      };
+
+      // Concurrent invocations
+      const call1 = handleConfirmDeleteAccount();
+      const call2 = handleConfirmDeleteAccount();
+
+      await Promise.all([call1, call2]);
+
+      assert.equal(apiCallCount, 1, 'Only one deleteAccount call must execute');
+      assert.equal(isDeletingAccount, false);
+    });
+
+    it('Strict independence: bulk meeting deletion and account deletion never accidentally cross-invoke', async () => {
+      let bulkDeleteInvoked = false;
+      let accountDeleteInvoked = false;
+
+      globalThis.fetch = async (url, options) => {
+        if (url.endsWith('/api/meetings') && options.method === 'DELETE') {
+          bulkDeleteInvoked = true;
+          return new Response(JSON.stringify({ status: 'deleted', deleted_count: 5, message: 'Done' }), { status: 200 });
+        }
+        if (url.endsWith('/api/account') && options.method === 'DELETE') {
+          accountDeleteInvoked = true;
+          return new Response(JSON.stringify({ status: 'deleted', meetings_deleted: 5, message: 'Done' }), { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      };
+
+      // Executing bulk delete must NOT touch /api/account
+      await client.deleteAllMeetings();
+      assert.equal(bulkDeleteInvoked, true);
+      assert.equal(accountDeleteInvoked, false);
+
+      // Reset
+      bulkDeleteInvoked = false;
+      accountDeleteInvoked = false;
+
+      // Executing account delete must NOT touch /api/meetings
+      await client.deleteAccount();
+      assert.equal(accountDeleteInvoked, true);
+      assert.equal(bulkDeleteInvoked, false);
+    });
+
+    it('Rate limiting: handles HTTP 429 on /api/account and surfaces Retry-After message', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: 'Rate limit exceeded for endpoint account_delete. Maximum 5 requests per minute allowed.',
+          }),
+          {
+            status: 429,
+            headers: {
+              'Content-Type': 'application/json',
+              'Retry-After': '50',
+            },
+          }
+        );
+      };
+
+      await assert.rejects(
+        async () => client.deleteAccount(),
+        /Rate limit exceeded\. Please wait 50 seconds before trying again\./
+      );
+    });
+
+    it('Demo account callout: conditionally displays informational warning only for demo users', () => {
+      const renderDemoAccountCallout = (isDemoUser) => {
+        if (!isDemoUser) return null;
+        return 'Demo Account: Deleting this account permanently wipes this temporary demo session and does not affect any separate registered accounts.';
+      };
+
+      // When isDemoUser is true: returns exact amber callout text
+      const demoResult = renderDemoAccountCallout(true);
+      assert.ok(demoResult !== null);
+      assert.match(demoResult, /Demo Account: Deleting this account permanently wipes this temporary demo session/);
+      assert.match(demoResult, /does not affect any separate registered accounts/);
+
+      // When isDemoUser is false: returns null (callout omitted)
+      const registeredResult = renderDemoAccountCallout(false);
+      assert.equal(registeredResult, null);
+
+      // When isDemoUser is undefined/null: returns null
+      assert.equal(renderDemoAccountCallout(undefined), null);
+    });
+
+    it('Data minimization: DELETE /api/account response omits user_id and retains status, meetings_deleted, message', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            status: 'deleted',
+            meetings_deleted: 3,
+            message: 'User account and 3 meeting records permanently deleted.',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const res = await client.deleteAccount();
+      assert.equal(res.status, 'deleted');
+      assert.equal(res.meetings_deleted, 3);
+      assert.ok(typeof res.message === 'string');
+      assert.equal(res.user_id, undefined, 'user_id must not be present in response');
     });
   });
 });

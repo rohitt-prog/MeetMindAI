@@ -318,6 +318,8 @@ Incoming Request
 | `/api/meetings` | `GET` | Bearer Token Required | None | `limit` query param (1–100) | Retrieves recent meetings owned by caller, sorted by `updated_at DESC`. |
 | `/api/meetings/{id}` | `GET` | Bearer Token Required | None | Alphanumeric ID | Retrieves full meeting transcript, analysis, and revision history. Returns 404 if not owned. |
 | `/api/meetings/{id}` | `DELETE` | Bearer Token Required | None | Alphanumeric ID | Permanently removes meeting document. Returns 404 if not owned. |
+| `/api/meetings` | `DELETE` | Bearer Token Required | 5 / min | None | Permanently bulk-deletes all saved meetings owned by caller. Preserves account credentials. |
+| `/api/account` | `DELETE` | Bearer Token Required | 5 / min | None | Permanently deletes user account, all saved meetings, and Firebase Authentication user. |
 | `/api/meetings/export/pdf` | `POST` | Bearer Token Required | 20 / min | $\le$ 1 MiB body | Compiles unsaved/active meeting analysis into a streamed PDF report. |
 | `/api/meetings/{id}/export/pdf` | `GET` | Bearer Token Required | 20 / min | Alphanumeric ID | Fetches saved meeting and compiles into a streamed PDF report. Returns 404 if not owned. |
 

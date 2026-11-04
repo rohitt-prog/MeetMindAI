@@ -947,3 +947,265 @@ def test_bulk_delete_endpoint_reports_partial_progress_safely():
         assert len(docs) == 50
     finally:
         firebase_service._client = orig_client
+
+
+# ==============================================================================
+# Phase 3 Account Deletion Tests
+# ==============================================================================
+
+
+def test_account_deletion_authenticated_success():
+    """
+    Test authenticated account deletion:
+    1. Deletes all Firestore meeting documents owned by the user.
+    2. Calls firebase_admin.auth.delete_user(uid) to terminate the Firebase Auth account.
+    3. Returns HTTP 200 with AccountDeleteResponse (status='deleted', meetings_deleted=N).
+    """
+    owner_uid = "test_user_default"
+    docs = {
+        "m_acct_1": {"meeting_id": "m_acct_1", "owner_uid": owner_uid, "title": "Meeting 1"},
+        "m_acct_2": {"meeting_id": "m_acct_2", "owner_uid": owner_uid, "title": "Meeting 2"},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user") as mock_delete_user:
+        try:
+            response = client.delete("/api/account")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "deleted"
+            assert "user_id" not in data
+            assert data["meetings_deleted"] == 2
+            assert "user account and 2 meeting records permanently deleted" in data["message"].lower()
+
+            # Verify Firestore meetings for the user were deleted
+            assert len(docs) == 0
+
+            # Verify Firebase Auth delete_user was called exactly once with the user UID
+            mock_delete_user.assert_called_once_with(owner_uid)
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_enforces_authentication():
+    """
+    Test that DELETE /api/account returns HTTP 401 Unauthorized when unauthenticated.
+    """
+    from app.core.auth import get_current_user
+    orig_override = app.dependency_overrides.pop(get_current_user, None)
+
+    try:
+        response = client.delete("/api/account")
+        assert response.status_code == 401
+        assert "authentication required" in response.json()["detail"].lower()
+    finally:
+        if orig_override:
+            app.dependency_overrides[get_current_user] = orig_override
+
+
+def test_account_deletion_ownership_isolation():
+    """
+    Test that DELETE /api/account only deletes meetings belonging to the verified user's UID.
+    Other users' meetings and unowned legacy records are preserved.
+    """
+    owner_uid = "test_user_default"
+    other_uid = "other_user_999"
+    docs = {
+        "m_mine": {"meeting_id": "m_mine", "owner_uid": owner_uid, "title": "My Meeting"},
+        "m_other": {"meeting_id": "m_other", "owner_uid": other_uid, "title": "Other User Meeting"},
+        "m_legacy": {"meeting_id": "m_legacy", "owner_uid": None, "title": "Unowned Meeting"},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user"):
+        try:
+            response = client.delete("/api/account")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["meetings_deleted"] == 1
+
+            # My meeting is deleted
+            assert "m_mine" not in docs
+            # Other user's meeting and unowned meeting are completely intact
+            assert "m_other" in docs
+            assert "m_legacy" in docs
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_firestore_failure_aborts_before_auth_deletion():
+    """
+    Test that if Firestore deletion fails, Firebase Auth delete_user is NOT called.
+    The account credentials are preserved so the user can re-authenticate or retry.
+    Returns HTTP 502 Bad Gateway.
+    """
+    owner_uid = "test_user_default"
+    docs = {
+        "m_fail_1": {"meeting_id": "m_fail_1", "owner_uid": owner_uid},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    # Fail batch commit
+    mock_batch = MagicMock()
+    mock_batch.commit.side_effect = Exception("Firestore transaction timeout")
+    mock_db.batch.side_effect = None
+    mock_db.batch.return_value = mock_batch
+
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user") as mock_delete_user:
+        try:
+            response = client.delete("/api/account")
+            assert response.status_code == 502
+            assert "failed to delete meeting records batch" in response.json()["detail"].lower()
+
+            # Critical assertion: auth.delete_user MUST NOT be called if Firestore fails!
+            mock_delete_user.assert_not_called()
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_auth_failure_after_data_deleted():
+    """
+    Test partial failure when Firestore data is deleted successfully, but
+    firebase_admin.auth.delete_user fails.
+    Verifies:
+      1. Endpoint returns HTTP 502 Bad Gateway.
+      2. Does NOT report full success.
+      3. Informs the user that meeting data was deleted but auth account deletion failed.
+    """
+    owner_uid = "test_user_default"
+    docs = {
+        "m_data_1": {"meeting_id": "m_data_1", "owner_uid": owner_uid},
+        "m_data_2": {"meeting_id": "m_data_2", "owner_uid": owner_uid},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user", side_effect=Exception("Firebase Auth service error 503")):
+        try:
+            response = client.delete("/api/account")
+            assert response.status_code == 502
+            detail = response.json()["detail"]
+            # Meetings were deleted
+            assert len(docs) == 0
+            # Error explicitly explains that meetings were deleted, but auth removal failed
+            assert "application meeting records (2) were permanently deleted" in detail.lower() or "saved meetings (2) were permanently deleted" in detail.lower()
+            assert "failed to remove" in detail.lower() or "could not be removed" in detail.lower()
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_safe_production_error_messages():
+    """
+    Test that when ENVIRONMENT is set to 'production', raw internal exceptions
+    and stack traces are NEVER leaked in client error responses.
+    """
+    owner_uid = "test_user_default"
+    docs = {
+        "m_secret": {"meeting_id": "m_secret", "owner_uid": owner_uid},
+    }
+    mock_db = create_mock_firestore_client(docs)
+    mock_batch = MagicMock()
+    mock_batch.commit.side_effect = Exception("INTERNAL_SECRET_DATABASE_STACKTRACE_LEAK_TEST")
+    mock_db.batch.side_effect = None
+    mock_db.batch.return_value = mock_batch
+
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("app.core.config.settings.ENVIRONMENT", "production"):
+        try:
+            response = client.delete("/api/account")
+            assert response.status_code == 502
+            detail = response.json()["detail"]
+            # Raw stacktrace string must NOT appear
+            assert "INTERNAL_SECRET_DATABASE_STACKTRACE_LEAK_TEST" not in detail
+            assert "upstream database service is temporarily unavailable" in detail.lower()
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_retry_behavior():
+    """
+    Test that if an initial deletion attempt partially succeeds (e.g. 400 docs deleted in batch 1,
+    batch 2 fails), a subsequent retry cleans up the surviving 50 records and finishes auth deletion.
+    """
+    owner_uid = "test_user_retry"
+    docs = {
+        f"m_acct_part_{i}": {"meeting_id": f"m_acct_part_{i}", "owner_uid": owner_uid}
+        for i in range(450)
+    }
+    mock_db = create_mock_firestore_client(docs)
+    commit_count = 0
+
+    def mock_batch_with_timeout_on_batch_2():
+        batch_mock = MagicMock()
+        pending = []
+
+        def b_delete(ref):
+            pending.append(ref)
+
+        def b_commit():
+            nonlocal commit_count
+            commit_count += 1
+            if commit_count == 2:
+                raise Exception("Firestore timeout on batch 2")
+            for ref in pending:
+                doc_id = getattr(ref, "id", None)
+                if doc_id and doc_id in docs:
+                    del docs[doc_id]
+
+        batch_mock.delete.side_effect = b_delete
+        batch_mock.commit.side_effect = b_commit
+        return batch_mock
+
+    mock_db.batch.side_effect = mock_batch_with_timeout_on_batch_2
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user") as mock_delete_user:
+        try:
+            # First attempt: Batch 1 (400) commits, Batch 2 (50) fails
+            with pytest.raises(FirebaseOperationError) as exc_info:
+                firebase_service.delete_user_account_and_data(owner_uid)
+
+            assert exc_info.value.deleted_count == 400
+            assert len(docs) == 50
+            mock_delete_user.assert_not_called()
+
+            # Retry: Batch 2 (50) commits, auth delete succeeds
+            deleted = firebase_service.delete_user_account_and_data(owner_uid)
+            assert deleted == 50
+            assert len(docs) == 0
+            mock_delete_user.assert_called_once_with(owner_uid)
+        finally:
+            firebase_service._client = orig_client
+
+
+def test_account_deletion_rate_limiting():
+    """
+    Test that DELETE /api/account enforces the 5/minute rate limit.
+    """
+    mock_db = create_mock_firestore_client({})
+    orig_client = firebase_service._client
+    firebase_service.set_client(mock_db)
+
+    with patch("firebase_admin.auth.delete_user"):
+        try:
+            for _ in range(5):
+                res = client.delete("/api/account")
+                assert res.status_code == 200
+
+            # 6th request is throttled
+            throttled = client.delete("/api/account")
+            assert throttled.status_code == 429
+            assert "rate limit exceeded" in throttled.json()["detail"].lower()
+            assert "Retry-After" in throttled.headers
+        finally:
+            firebase_service._client = orig_client

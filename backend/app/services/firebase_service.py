@@ -494,5 +494,67 @@ class FirebaseService:
         logger.info(f"Permanently deleted {total_deleted} Firestore meeting records for user '{owner_uid}'.")
         return total_deleted
 
+    def delete_user_account(self, uid: str) -> None:
+        """
+        Permanently deletes a user from Firebase Authentication.
+        """
+        if not uid or not str(uid).strip():
+            raise ValueError("User UID cannot be empty.")
+
+        clean_uid = str(uid).strip()
+
+        if not firebase_admin._apps:
+            self.initialize_app()
+
+        try:
+            from firebase_admin import auth
+            auth.delete_user(clean_uid)
+            logger.info(f"Permanently deleted Firebase Auth user '{clean_uid}'.")
+        except Exception as e:
+            from firebase_admin import auth
+            if isinstance(e, auth.UserNotFoundError):
+                logger.warning(f"Firebase Auth user '{clean_uid}' not found during deletion (may already be deleted).")
+                return
+            logger.error(f"Failed to delete Firebase Auth user '{clean_uid}': {e}")
+            raise FirebaseOperationError(f"Failed to delete Firebase authentication user: {str(e)}") from e
+
+    def delete_user_account_and_data(self, owner_uid: str) -> int:
+        """
+        Permanently deletes all Cloud Firestore application data for the specified user,
+        followed by deleting their Firebase Authentication account.
+
+        Strict sequence:
+        1. Query and batch delete all user-owned meetings from Cloud Firestore.
+        2. Delete the user account from Firebase Authentication.
+
+        Returns the number of Firestore meeting documents deleted.
+        """
+        clean_uid = (owner_uid or "").strip()
+        if not clean_uid:
+            raise ValueError("User UID cannot be empty.")
+
+        # Step 1: Delete all Firestore application data
+        meetings_deleted = self.delete_all_user_meetings(owner_uid=clean_uid)
+
+        # Step 2: Delete Firebase Authentication user record
+        try:
+            self.delete_user_account(uid=clean_uid)
+        except Exception as e:
+            logger.error(
+                f"Failed to delete Firebase Auth user '{clean_uid}' after deleting {meetings_deleted} meetings: {e}"
+            )
+            err_msg = (
+                f"Application meeting records ({meetings_deleted}) were permanently deleted, "
+                f"but failed to remove the authentication user account. Please contact support or retry."
+            )
+            exc = FirebaseOperationError(err_msg, deleted_count=meetings_deleted)
+            exc.auth_deletion_failed = True
+            raise exc from e
+
+        logger.info(
+            f"Successfully completed account erasure for user '{clean_uid}' ({meetings_deleted} meetings deleted)."
+        )
+        return meetings_deleted
+
 
 firebase_service = FirebaseService()

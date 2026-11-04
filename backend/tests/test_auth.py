@@ -46,6 +46,8 @@ def test_missing_auth_token_returns_401():
             ("POST", "/api/meetings/analyze"),
             ("GET", "/api/meetings/m_test_123"),
             ("DELETE", "/api/meetings/m_test_123"),
+            ("DELETE", "/api/meetings"),
+            ("DELETE", "/api/account"),
             ("GET", "/api/meetings/m_test_123/export/pdf"),
             ("POST", "/api/meetings/clarify"),
             ("POST", "/api/meetings/export/pdf"),
