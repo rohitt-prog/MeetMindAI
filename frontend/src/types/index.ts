@@ -159,6 +159,17 @@ export interface MeetingBackupPayload {
   meetings: MeetingDetailResponse[];
 }
 
+export type ConflictStrategy = 'skip' | 'overwrite';
+
+export interface BackupRestoreResponse {
+  status: string;
+  total_records: number;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  message: string;
+}
+
 export interface AnalysisState {
   isLoading: boolean;
   isClarifying: boolean;

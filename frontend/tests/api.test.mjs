@@ -522,6 +522,122 @@ class ApiServiceTestClient {
     }
   }
 
+  async exportBackup() {
+    const url = `${this.baseUrl}/api/meetings/backup`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to export backup (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
+          errorMessage = 'Firebase Firestore is not configured on the backend.';
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Backup export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to export backup.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while exporting meeting backup.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async restoreBackup(backup, conflictStrategy = 'skip') {
+    const url = `${this.baseUrl}/api/meetings/restore?conflict_strategy=${encodeURIComponent(conflictStrategy)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(backup),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to restore backup (${response.status})`;
+        try {
+          const errorJson = await response.json();
+          if (typeof errorJson.detail === 'string') {
+            errorMessage = errorJson.detail;
+          } else if (Array.isArray(errorJson.detail)) {
+            errorMessage = errorJson.detail
+              .map((e) => e.msg || '')
+              .filter(Boolean)
+              .join(', ');
+          }
+        } catch {
+          // fallback
+        }
+
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
+          errorMessage = 'Firebase Firestore is not configured on the backend.';
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Backup restore timed out after 45 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to restore backup.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while restoring meeting backup.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async exportMeetingPdf(request) {
     const url = `${this.baseUrl}/api/meetings/export/pdf`;
     const controller = new AbortController();
@@ -2878,6 +2994,329 @@ describe('Frontend API Service & State Integration Tests', () => {
           assert.equal(val?.includes(sensitiveKey), false, 'Key must not be in sessionStorage');
         }
       }
+    });
+  });
+
+  describe('Phase 4 JSON Backup & Restore', () => {
+    // Pure logic mirrors of backup validation
+    const parseAndValidateBackupJson = (jsonString) => {
+      if (!jsonString || !jsonString.trim()) {
+        return { valid: false, error: 'The selected backup file is empty.' };
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonString);
+      } catch (err) {
+        return { valid: false, error: `Malformed JSON file: ${err.message}` };
+      }
+
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return { valid: false, error: 'Backup root must be a JSON object.' };
+      }
+
+      const version = typeof parsed.version === 'string' ? parsed.version.trim() : '';
+      if (!version) {
+        return { valid: false, error: "Missing required 'version' field in backup." };
+      }
+      if (version !== '1.0') {
+        return {
+          valid: false,
+          error: `Unsupported backup version '${version}'. Only version 1.0 is supported.`,
+        };
+      }
+
+      const backupType = typeof parsed.backup_type === 'string' ? parsed.backup_type.trim() : '';
+      if (backupType !== 'meetmind_ai_meetings_backup') {
+        return {
+          valid: false,
+          error: `Invalid backup type '${backupType}'. Expected 'meetmind_ai_meetings_backup'.`,
+        };
+      }
+
+      if (!Array.isArray(parsed.meetings)) {
+        return { valid: false, error: "Backup file is missing required 'meetings' array." };
+      }
+
+      if (parsed.meetings.length === 0) {
+        return { valid: false, error: 'Backup file contains no meeting records to restore.' };
+      }
+
+      if (parsed.meetings.length > 500) {
+        return {
+          valid: false,
+          error: `Backup contains ${parsed.meetings.length} meetings, exceeding the maximum limit of 500 records.`,
+        };
+      }
+
+      const seenIds = new Set();
+      let totalActionItems = 0;
+      let totalDecisions = 0;
+
+      for (let i = 0; i < parsed.meetings.length; i++) {
+        const item = parsed.meetings[i];
+        if (typeof item !== 'object' || item === null) {
+          return { valid: false, error: `Meeting at index ${i} is not a valid object.` };
+        }
+
+        const meetingId = typeof item.meeting_id === 'string' ? item.meeting_id.trim() : '';
+        if (!meetingId) {
+          return { valid: false, error: `Meeting at index ${i} is missing a valid 'meeting_id'.` };
+        }
+        if (seenIds.has(meetingId)) {
+          return { valid: false, error: `Duplicate meeting ID '${meetingId}' detected at index ${i}.` };
+        }
+        seenIds.add(meetingId);
+
+        if (typeof item.transcript !== 'string' || !item.transcript.trim()) {
+          return { valid: false, error: `Meeting '${meetingId}' (index ${i}) has an empty transcript.` };
+        }
+
+        if (typeof item.analysis !== 'object' || item.analysis === null) {
+          return { valid: false, error: `Meeting '${meetingId}' (index ${i}) is missing 'analysis' data.` };
+        }
+        if (typeof item.analysis.summary !== 'string' || !item.analysis.summary.trim()) {
+          return { valid: false, error: `Meeting '${meetingId}' (index ${i}) analysis is missing required 'summary'.` };
+        }
+
+        const actions = Array.isArray(item.analysis.action_items) ? item.analysis.action_items : [];
+        const decisions = Array.isArray(item.analysis.decisions) ? item.analysis.decisions : [];
+        totalActionItems += actions.length;
+        totalDecisions += decisions.length;
+      }
+
+      return {
+        valid: true,
+        payload: parsed,
+        summary: {
+          totalMeetings: parsed.meetings.length,
+          totalActionItems,
+          totalDecisions,
+          exportedAt: parsed.exported_at,
+          version,
+        },
+      };
+    };
+
+    const validBackupPayload = {
+      version: '1.0',
+      backup_type: 'meetmind_ai_meetings_backup',
+      exported_at: '2026-03-05T12:00:00Z',
+      user: { uid: 'u_123', email: 'user@meetmind.ai', is_demo_user: false },
+      metrics: { total_meetings: 1, total_action_items: 2, total_decisions: 1, is_complete: true },
+      meetings: [
+        {
+          meeting_id: 'm_valid_1',
+          title: 'Planning Sync',
+          transcript: 'Alice: Deliverables are on track.',
+          created_at: '2026-03-05T10:00:00Z',
+          updated_at: '2026-03-05T10:00:00Z',
+          analysis: {
+            meeting_id: 'm_valid_1',
+            summary: 'Deliverables on track.',
+            discussion_points: ['Sprint goals'],
+            decisions: ['Approved sprint backlog'],
+            action_items: [
+              { id: 'a1', task: 'Review pull request', owner: 'Alice', deadline: 'Today', status: 'pending' },
+              { id: 'a2', task: 'Run integration suite', owner: 'Bob', deadline: 'Tomorrow', status: 'pending' },
+            ],
+            clarification_required: false,
+            clarifications: [],
+            open_follow_ups: [],
+          },
+        },
+      ],
+    };
+
+    it('Validation: successfully parses and validates correct backup payload', () => {
+      const jsonStr = JSON.stringify(validBackupPayload);
+      const result = parseAndValidateBackupJson(jsonStr);
+
+      assert.equal(result.valid, true);
+      assert.equal(result.summary.totalMeetings, 1);
+      assert.equal(result.summary.totalActionItems, 2);
+      assert.equal(result.summary.totalDecisions, 1);
+      assert.equal(result.summary.version, '1.0');
+    });
+
+    it('Validation: rejects malformed JSON with syntax error message', () => {
+      const result = parseAndValidateBackupJson('{ invalid json string');
+      assert.equal(result.valid, false);
+      assert.match(result.error, /Malformed JSON file/);
+    });
+
+    it('Validation: rejects unsupported backup versions', () => {
+      const payload = { ...validBackupPayload, version: '2.0' };
+      const result = parseAndValidateBackupJson(JSON.stringify(payload));
+      assert.equal(result.valid, false);
+      assert.match(result.error, /Unsupported backup version '2.0'/);
+    });
+
+    it('Validation: rejects non-MeetMind backup_type', () => {
+      const payload = { ...validBackupPayload, backup_type: 'random_backup' };
+      const result = parseAndValidateBackupJson(JSON.stringify(payload));
+      assert.equal(result.valid, false);
+      assert.match(result.error, /Invalid backup type/);
+    });
+
+    it('Validation: rejects backup with empty meetings array', () => {
+      const payload = { ...validBackupPayload, meetings: [] };
+      const result = parseAndValidateBackupJson(JSON.stringify(payload));
+      assert.equal(result.valid, false);
+      assert.match(result.error, /contains no meeting records/);
+    });
+
+    it('Validation: rejects duplicate meeting IDs within same backup', () => {
+      const payload = {
+        ...validBackupPayload,
+        meetings: [validBackupPayload.meetings[0], { ...validBackupPayload.meetings[0] }],
+      };
+      const result = parseAndValidateBackupJson(JSON.stringify(payload));
+      assert.equal(result.valid, false);
+      assert.match(result.error, /Duplicate meeting ID 'm_valid_1'/);
+    });
+
+    it('Validation: rejects meetings missing transcript', () => {
+      const payload = {
+        ...validBackupPayload,
+        meetings: [{ ...validBackupPayload.meetings[0], transcript: '   ' }],
+      };
+      const result = parseAndValidateBackupJson(JSON.stringify(payload));
+      assert.equal(result.valid, false);
+      assert.match(result.error, /has an empty transcript/);
+    });
+
+    it('API Service: exportBackup executes GET /api/meetings/backup and returns payload', async () => {
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, 'http://localhost:8000/api/meetings/backup');
+        assert.equal(options.method, 'GET');
+        return new Response(JSON.stringify(validBackupPayload), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      const result = await client.exportBackup();
+      assert.equal(result.version, '1.0');
+      assert.equal(result.backup_type, 'meetmind_ai_meetings_backup');
+      assert.equal(result.meetings.length, 1);
+    });
+
+    it('API Service: restoreBackup executes POST /api/meetings/restore with skip strategy', async () => {
+      let capturedUrl = null;
+      let capturedBody = null;
+
+      globalThis.fetch = async (url, options) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(options.body);
+        return new Response(
+          JSON.stringify({
+            status: 'restored',
+            total_records: 1,
+            imported_count: 1,
+            updated_count: 0,
+            skipped_count: 0,
+            message: 'Successfully restored 1 meeting (1 imported, 0 updated, 0 skipped).',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const result = await client.restoreBackup(validBackupPayload, 'skip');
+      assert.ok(capturedUrl.includes('/api/meetings/restore?conflict_strategy=skip'));
+      assert.equal(capturedBody.version, '1.0');
+      assert.equal(result.status, 'restored');
+      assert.equal(result.imported_count, 1);
+    });
+
+    it('API Service: restoreBackup executes POST /api/meetings/restore with overwrite strategy', async () => {
+      let capturedUrl = null;
+
+      globalThis.fetch = async (url) => {
+        capturedUrl = url;
+        return new Response(
+          JSON.stringify({
+            status: 'restored',
+            total_records: 1,
+            imported_count: 0,
+            updated_count: 1,
+            skipped_count: 0,
+            message: 'Successfully restored 1 meeting (0 imported, 1 updated, 0 skipped).',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const result = await client.restoreBackup(validBackupPayload, 'overwrite');
+      assert.ok(capturedUrl.includes('/api/meetings/restore?conflict_strategy=overwrite'));
+      assert.equal(result.updated_count, 1);
+    });
+
+    it('API Service Security: restoreBackup and exportBackup never leak BYOK key or model headers', async () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSySecretBYOKKeyPhase4');
+
+      let capturedExportHeaders = null;
+      let capturedRestoreHeaders = null;
+
+      globalThis.fetch = async (url, options) => {
+        if (url.includes('/backup')) {
+          capturedExportHeaders = options.headers;
+          return new Response(JSON.stringify(validBackupPayload), { status: 200 });
+        }
+        if (url.includes('/restore')) {
+          capturedRestoreHeaders = options.headers;
+          return new Response(
+            JSON.stringify({
+              status: 'restored',
+              total_records: 1,
+              imported_count: 1,
+              updated_count: 0,
+              skipped_count: 0,
+              message: 'Restored',
+            }),
+            { status: 200 }
+          );
+        }
+      };
+
+      await client.exportBackup();
+      await client.restoreBackup(validBackupPayload, 'skip');
+
+      assert.ok(capturedExportHeaders);
+      assert.equal(capturedExportHeaders['X-Gemini-API-Key'], undefined);
+      assert.equal(capturedExportHeaders['X-Gemini-Model'], undefined);
+
+      assert.ok(capturedRestoreHeaders);
+      assert.equal(capturedRestoreHeaders['X-Gemini-API-Key'], undefined);
+      assert.equal(capturedRestoreHeaders['X-Gemini-Model'], undefined);
+    });
+
+    it('API Service: handles HTTP 429 rate limit exceeded on restore', async () => {
+      globalThis.fetch = async () => {
+        return new Response(JSON.stringify({ detail: 'Rate limit exceeded' }), {
+          status: 429,
+          headers: { 'Retry-After': '12' },
+        });
+      };
+
+      await assert.rejects(
+        async () => client.restoreBackup(validBackupPayload),
+        /Please wait 12 seconds/
+      );
+    });
+
+    it('API Service: handles HTTP 503 when Firestore is unconfigured', async () => {
+      globalThis.fetch = async () => {
+        return new Response(JSON.stringify({ detail: 'Firebase Firestore is not configured.' }), {
+          status: 503,
+        });
+      };
+
+      await assert.rejects(
+        async () => client.restoreBackup(validBackupPayload),
+        /Firebase Firestore is not configured on the backend/
+      );
     });
   });
 });

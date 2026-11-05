@@ -19,6 +19,7 @@ import {
   Sliders,
   Database,
   Download,
+  Upload,
   Trash2,
   UserX,
   Cpu,
@@ -27,15 +28,24 @@ import {
   EyeOff,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { BackendConnectionState, ThemeMode, MeetingListItem } from '../types';
+import {
+  BackendConnectionState,
+  ThemeMode,
+  MeetingListItem,
+  MeetingBackupPayload,
+  ConflictStrategy,
+  BackupRestoreResponse,
+} from '../types';
 import { API_BASE_URL, apiService } from '../services/api';
 import {
   exportMeetingsBackup,
   calculateBackupMetrics,
+  parseAndValidateBackupJson,
   API_MAX_MEETING_LIMIT,
 } from '../services/backupService';
 import { BulkDeleteMeetingsModal } from './BulkDeleteMeetingsModal';
 import { DeleteAccountModal } from './DeleteAccountModal';
+import { RestoreBackupModal } from './RestoreBackupModal';
 
 interface SettingsProps {
   connectionState: BackendConnectionState;
@@ -194,6 +204,63 @@ export const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  // Backup Restore state
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState<boolean>(false);
+  const [restorePayload, setRestorePayload] = useState<MeetingBackupPayload | null>(null);
+  const [restoreFileMetadata, setRestoreFileMetadata] = useState<{
+    filename: string;
+    fileSize: number;
+    summary: {
+      totalMeetings: number;
+      totalActionItems: number;
+      totalDecisions: number;
+      exportedAt?: string;
+      version: string;
+    };
+  } | null>(null);
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
+  const [restoreModalError, setRestoreModalError] = useState<string | null>(null);
+  const [restoreSuccess, setRestoreSuccess] = useState<BackupRestoreResponse | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setRestoreError(null);
+    setRestoreSuccess(null);
+    setRestoreModalError(null);
+
+    // Reset input value so re-selecting same file triggers change
+    e.target.value = '';
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      const validation = parseAndValidateBackupJson(content);
+
+      if (!validation.valid || !validation.payload || !validation.summary) {
+        setRestoreError(validation.error || 'Failed to parse backup file.');
+        return;
+      }
+
+      setRestorePayload(validation.payload);
+      setRestoreFileMetadata({
+        filename: file.name,
+        fileSize: file.size,
+        summary: validation.summary,
+      });
+      setIsRestoreModalOpen(true);
+    };
+
+    reader.onerror = () => {
+      setRestoreError('Failed to read selected file from device.');
+    };
+
+    reader.readAsText(file);
+  };
+
   // Bulk Delete state
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState<boolean>(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState<boolean>(false);
@@ -210,6 +277,31 @@ export const Settings: React.FC<SettingsProps> = ({
       await onRefreshMeetings?.();
     } catch {
       // Ignore parent callback error
+    }
+  };
+
+  const handleConfirmRestore = async (conflictStrategy: ConflictStrategy) => {
+    if (!restorePayload || isRestoring) return;
+
+    setIsRestoring(true);
+    setRestoreModalError(null);
+    setRestoreError(null);
+
+    try {
+      const response = await apiService.restoreBackup(restorePayload, conflictStrategy);
+      setRestoreSuccess(response);
+      setIsRestoreModalOpen(false);
+      setRestorePayload(null);
+      setRestoreFileMetadata(null);
+
+      // Refresh metrics and workspace history
+      await refreshMeetingData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'An error occurred during restore.';
+      setRestoreModalError(msg);
+      setRestoreError(msg);
+    } finally {
+      setIsRestoring(false);
     }
   };
 
@@ -1288,6 +1380,65 @@ export const Settings: React.FC<SettingsProps> = ({
                 )}
               </div>
 
+              {/* JSON Restore Action Section */}
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Restore Meetings from JSON</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Upload a previously exported MeetMind AI JSON backup to restore meetings, action items, and decisions.
+                    </p>
+                  </div>
+
+                  <div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                      id="restore-backup-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isRestoring || isExporting}
+                      className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 font-medium text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 shrink-0 shadow-xs cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Import JSON Backup...</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Restore Success Outcome Notification */}
+                {restoreSuccess && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">{restoreSuccess.message}</p>
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 font-mono">
+                        Imported: {restoreSuccess.imported_count} new • Updated: {restoreSuccess.updated_count} • Skipped: {restoreSuccess.skipped_count}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Restore Error Notification */}
+                {restoreError && !isRestoreModalOpen && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 flex items-start gap-2.5 text-xs text-rose-800 dark:text-rose-300">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">Restore Validation Failed</p>
+                      <p className="text-[11px] text-rose-700 dark:text-rose-400 mt-0.5">{restoreError}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Destructive Action: Delete All Meetings */}
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1493,6 +1644,18 @@ export const Settings: React.FC<SettingsProps> = ({
                       5 / min
                     </span>
                   </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-950/40 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">Backup Export</span>
+                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+                      10 / min
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-950/40 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">Backup Restore</span>
+                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+                      5 / min
+                    </span>
+                  </div>
                 </div>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
                   Enforced per authenticated user on the FastAPI backend using sliding-window rate limiters.
@@ -1502,6 +1665,25 @@ export const Settings: React.FC<SettingsProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Restore Backup Modal */}
+      {restoreFileMetadata && (
+        <RestoreBackupModal
+          isOpen={isRestoreModalOpen}
+          onClose={() => {
+            if (!isRestoring) {
+              setIsRestoreModalOpen(false);
+              setRestoreModalError(null);
+            }
+          }}
+          onConfirm={handleConfirmRestore}
+          isRestoring={isRestoring}
+          filename={restoreFileMetadata.filename}
+          fileSize={restoreFileMetadata.fileSize}
+          summary={restoreFileMetadata.summary}
+          error={restoreModalError}
+        />
+      )}
 
       {/* Bulk Delete Confirmation Modal */}
       <BulkDeleteMeetingsModal

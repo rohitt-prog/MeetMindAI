@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from uuid import uuid4
 
 import firebase_admin
@@ -15,6 +15,13 @@ from app.schemas.meeting import (
     MeetingDetailResponse,
     MeetingListItem,
     ClarificationAnswer,
+)
+from app.schemas.backup import (
+    BackupUserSummary,
+    BackupMetrics,
+    MeetingBackupPayload,
+    BackupRestorePayload,
+    BackupRestoreResponse,
 )
 
 logger = logging.getLogger("meetmind-ai.firebase")
@@ -664,6 +671,294 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"Failed to delete user preferences for '{clean_uid}': {e}")
             raise FirebaseOperationError(f"Failed to delete user preferences: {str(e)}")
+
+    def export_user_backup(
+        self,
+        owner_uid: str,
+        email: Optional[str] = None,
+        is_demo_user: bool = False,
+    ) -> MeetingBackupPayload:
+        """
+        Exports all saved meetings owned by owner_uid into a standardized,
+        sanitized JSON backup payload. Excludes sensitive secrets, tokens,
+        and internal configuration.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            raise ValueError("User UID cannot be empty.")
+        clean_uid = str(owner_uid).strip()
+
+        if not self.is_configured():
+            raise FirebaseConfigError("Firebase Firestore is not configured.")
+
+        db = self.get_client()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        try:
+            coll_ref = db.collection(self._collection_name)
+            query = coll_ref.where(filter=firestore.FieldFilter("owner_uid", "==", clean_uid))
+            snapshots = query.stream()
+        except Exception as e:
+            logger.error(f"Failed to query meetings for export (user: {clean_uid}): {e}")
+            raise FirebaseOperationError(f"Failed to retrieve user meetings for backup: {str(e)}")
+
+        detailed_meetings: List[MeetingDetailResponse] = []
+        total_action_items = 0
+        total_decisions = 0
+
+        for doc in snapshots:
+            data = doc.to_dict() or {}
+            meeting_id = data.get("meeting_id") or doc.id
+            doc_owner = data.get("owner_uid")
+
+            # Strict ownership guard: document must belong to caller
+            if not doc_owner or not isinstance(doc_owner, str) or doc_owner.strip() != clean_uid:
+                continue
+
+            analysis_dict = data.get("analysis", {})
+            try:
+                analysis_obj = MeetingAnalysisResponse.model_validate(analysis_dict)
+            except Exception as val_err:
+                logger.warning(f"Skipping malformed analysis in meeting {meeting_id}: {val_err}")
+                continue
+
+            analysis_obj.meeting_id = meeting_id
+            action_items = analysis_obj.action_items or []
+            decisions = analysis_obj.decisions or []
+
+            total_action_items += len(action_items)
+            total_decisions += len(decisions)
+
+            detailed_meetings.append(
+                MeetingDetailResponse(
+                    meeting_id=meeting_id,
+                    owner_uid=clean_uid,
+                    title=data.get("title"),
+                    transcript=data.get("transcript", ""),
+                    created_at=data.get("created_at", now_iso),
+                    updated_at=data.get("updated_at", now_iso),
+                    analysis=analysis_obj,
+                    answers_history=data.get("answers_history", []),
+                )
+            )
+
+        # Sort in memory by updated_at descending, then created_at
+        detailed_meetings.sort(key=lambda m: (m.updated_at or m.created_at or ""), reverse=True)
+
+        user_summary = BackupUserSummary(
+            uid=clean_uid,
+            email=email if email and "@" in email else ("demo@meetmind.ai" if is_demo_user else None),
+            is_demo_user=is_demo_user,
+        )
+
+        metrics = BackupMetrics(
+            total_meetings=len(detailed_meetings),
+            total_action_items=total_action_items,
+            total_decisions=total_decisions,
+            is_complete=True,
+            api_limit_reached=False,
+            retrieval_note=f"Complete backup of all {len(detailed_meetings)} saved meeting records for this account.",
+        )
+
+        return MeetingBackupPayload(
+            version="1.0",
+            backup_type="meetmind_ai_meetings_backup",
+            exported_at=now_iso,
+            user=user_summary,
+            metrics=metrics,
+            meetings=detailed_meetings,
+        )
+
+    def _allocate_unique_meeting_id(
+        self,
+        coll_ref: Any,
+        reserved_ids: set,
+        max_attempts: int = 15,
+    ) -> str:
+        """
+        Allocates a verified unique meeting ID that does not collide with existing
+        Firestore documents or already reserved IDs in this batch.
+
+        Attempts standard timestamped IDs first, then transitions to high-entropy
+        full UUID fallback candidates if needed.
+        All candidates are strictly verified against Firestore.
+        Raises FirebaseOperationError if Firestore lookups fail or if max_attempts is exceeded.
+        """
+        for attempt in range(max_attempts):
+            if attempt < 10:
+                candidate = self.generate_meeting_id()
+            else:
+                ts = int(datetime.now(timezone.utc).timestamp())
+                candidate = f"m_{ts}_{uuid4().hex}"
+
+            if candidate in reserved_ids:
+                continue
+
+            try:
+                snap = coll_ref.document(candidate).get()
+            except Exception as e:
+                logger.error(f"Firestore error checking candidate meeting ID '{candidate}': {e}")
+                raise FirebaseOperationError(
+                    f"Failed to verify meeting ID uniqueness in Firestore: {str(e)}"
+                )
+
+            if not snap.exists:
+                reserved_ids.add(candidate)
+                return candidate
+
+        raise FirebaseOperationError(
+            f"Failed to allocate a unique meeting ID after {max_attempts} attempts due to collisions."
+        )
+
+    def restore_user_backup(
+        self,
+        owner_uid: str,
+        backup: BackupRestorePayload,
+        conflict_strategy: str = "skip",
+    ) -> BackupRestoreResponse:
+        """
+        Validates and restores meeting records from a backup into Firestore for owner_uid.
+        Enforces:
+        - Atomic all-or-nothing execution via pre-validation and Firestore batch writes.
+        - Strict user isolation: owner_uid is forced to the authenticated caller.
+        - Conflict resolution: 'skip' preserves existing meetings owned by caller; 'overwrite' updates them.
+        - Cross-user and unowned protection: if a meeting ID matches another user's document, has no owner,
+          or has an empty owner, a fresh unique ID is allocated.
+        - Credential exclusion: no secrets, keys, or external configs are persisted.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            raise ValueError("User UID cannot be empty.")
+        clean_uid = str(owner_uid).strip()
+
+        if conflict_strategy not in ("skip", "overwrite"):
+            raise ValueError(f"Invalid conflict strategy '{conflict_strategy}'. Expected 'skip' or 'overwrite'.")
+
+        if not self.is_configured():
+            raise FirebaseConfigError("Firebase Firestore is not configured.")
+
+        meetings = backup.meetings
+        if not meetings:
+            raise ValueError("Backup file contains no meeting records to restore.")
+        if len(meetings) > 500:
+            raise ValueError("Backup exceeds maximum limit of 500 meetings per restore request.")
+
+        # 1. Pre-validation: internal duplicate check and field validation
+        seen_ids = set()
+        for idx, m in enumerate(meetings):
+            raw_id = (m.meeting_id or "").strip()
+            if not raw_id:
+                raise ValueError(f"Meeting at index {idx} has an empty meeting ID.")
+            if raw_id in seen_ids:
+                raise ValueError(f"Duplicate meeting ID '{raw_id}' detected at index {idx} in backup file.")
+            seen_ids.add(raw_id)
+
+            if not m.transcript or not m.transcript.strip():
+                raise ValueError(f"Meeting '{raw_id}' (index {idx}) has an empty transcript.")
+
+            if not m.analysis or not m.analysis.summary or not m.analysis.summary.strip():
+                raise ValueError(f"Meeting '{raw_id}' (index {idx}) is missing required analysis summary.")
+
+        db = self.get_client()
+        coll_ref = db.collection(self._collection_name)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        imported_count = 0
+        updated_count = 0
+        skipped_count = 0
+
+        # Track reserved IDs to guarantee no ID collisions within this batch
+        reserved_ids: set = {m.meeting_id.strip() for m in meetings if m.meeting_id}
+
+        # Prepare documents to write
+        docs_to_write: List[Tuple[Any, Dict[str, Any]]] = []
+
+        for m in meetings:
+            orig_id = m.meeting_id.strip()
+            doc_ref = coll_ref.document(orig_id)
+            try:
+                snapshot = doc_ref.get()
+            except Exception as e:
+                logger.error(f"Error checking document '{orig_id}' during restore: {e}")
+                raise FirebaseOperationError(f"Failed to inspect existing document in Firestore: {str(e)}")
+
+            if snapshot.exists:
+                doc_data = snapshot.to_dict() or {}
+                raw_owner = doc_data.get("owner_uid")
+                # Document is caller-owned ONLY when existing_owner exactly matches clean_uid
+                is_caller_owned = bool(
+                    raw_owner
+                    and isinstance(raw_owner, str)
+                    and raw_owner.strip() == clean_uid
+                )
+
+                if is_caller_owned:
+                    if conflict_strategy == "skip":
+                        skipped_count += 1
+                        continue
+                    else:  # overwrite
+                        target_id = orig_id
+                        target_ref = doc_ref
+                        updated_count += 1
+                else:
+                    # Document belongs to another user, or has missing/empty owner.
+                    # Never overwrite: allocate a fresh unique meeting ID for caller.
+                    target_id = self._allocate_unique_meeting_id(coll_ref, reserved_ids)
+                    target_ref = coll_ref.document(target_id)
+                    imported_count += 1
+            else:
+                target_id = orig_id
+                target_ref = doc_ref
+                reserved_ids.add(target_id)
+                imported_count += 1
+
+            # Sanitize and prepare document payload (discarding any external credentials/tokens)
+            analysis_dict = m.analysis.model_dump()
+            analysis_dict["meeting_id"] = target_id
+
+            clean_doc_data: Dict[str, Any] = {
+                "meeting_id": target_id,
+                "owner_uid": clean_uid,
+                "title": m.title.strip() if m.title and m.title.strip() else None,
+                "transcript": m.transcript.strip(),
+                "created_at": m.created_at or now_iso,
+                "updated_at": now_iso,
+                "analysis": analysis_dict,
+                "answers_history": [
+                    {k: v for k, v in ans.items() if k in ("clarification_id", "answer", "answered_at", "user_uid")}
+                    for ans in (m.answers_history or [])
+                    if isinstance(ans, dict)
+                ],
+            }
+            docs_to_write.append((target_ref, clean_doc_data))
+
+        # 2. Atomic batch commit
+        if docs_to_write:
+            try:
+                batch = db.batch()
+                for target_ref, data in docs_to_write:
+                    batch.set(target_ref, data)
+                batch.commit()
+                logger.info(
+                    f"Successfully restored {len(docs_to_write)} meetings for user '{clean_uid}' "
+                    f"(imported: {imported_count}, updated: {updated_count}, skipped: {skipped_count})."
+                )
+            except Exception as e:
+                logger.error(f"Failed to commit restore batch for user '{clean_uid}': {e}")
+                raise FirebaseOperationError(f"Failed to commit restored meetings to database: {str(e)}")
+
+        total_records = len(meetings)
+        summary_msg = (
+            f"Successfully restored {total_records} meeting{'s' if total_records != 1 else ''} "
+            f"({imported_count} imported, {updated_count} updated, {skipped_count} skipped)."
+        )
+
+        return BackupRestoreResponse(
+            status="restored",
+            total_records=total_records,
+            imported_count=imported_count,
+            updated_count=updated_count,
+            skipped_count=skipped_count,
+            message=summary_msg,
+        )
 
 
 firebase_service = FirebaseService()

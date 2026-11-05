@@ -155,17 +155,26 @@ def create_mock_firestore_client(existing_docs=None):
     def mock_batch():
         batch_mock = MagicMock()
         pending_deletes = []
+        pending_sets = []
 
         def batch_delete(ref):
             pending_deletes.append(ref)
+
+        def batch_set(ref, data):
+            pending_sets.append((ref, data))
 
         def batch_commit():
             for ref in pending_deletes:
                 doc_id = getattr(ref, "id", None)
                 if doc_id and doc_id in existing_docs:
                     del existing_docs[doc_id]
+            for ref, data in pending_sets:
+                doc_id = getattr(ref, "id", None)
+                if doc_id:
+                    existing_docs[doc_id] = data
 
         batch_mock.delete.side_effect = batch_delete
+        batch_mock.set.side_effect = batch_set
         batch_mock.commit.side_effect = batch_commit
         return batch_mock
 

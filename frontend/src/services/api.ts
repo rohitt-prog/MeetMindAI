@@ -11,6 +11,9 @@ import {
   MeetingPdfExportRequest,
   UserPreferencesResponse,
   ValidateKeyResponse,
+  MeetingBackupPayload,
+  BackupRestoreResponse,
+  ConflictStrategy,
 } from '../types/index';
 
 /**
@@ -660,6 +663,133 @@ class ApiService {
         throw err;
       }
       throw new Error('An unexpected error occurred while deleting the account.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Export all saved meetings owned by the authenticated user as a structured JSON backup.
+   * Calls GET /api/meetings/backup
+   */
+  async exportBackup(): Promise<MeetingBackupPayload> {
+    const url = `${this.baseUrl}/api/meetings/backup`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to export backup (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // fallback
+        }
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
+          errorMessage = 'Firebase Firestore is not configured on the backend.';
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as MeetingBackupPayload;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Backup export timed out after 30 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to export backup.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while exporting meeting backup.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Validate and restore meetings from an uploaded JSON backup file.
+   * Calls POST /api/meetings/restore?conflict_strategy={strategy}
+   */
+  async restoreBackup(
+    backup: MeetingBackupPayload,
+    conflictStrategy: ConflictStrategy = 'skip'
+  ): Promise<BackupRestoreResponse> {
+    const url = `${this.baseUrl}/api/meetings/restore?conflict_strategy=${encodeURIComponent(conflictStrategy)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(backup),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required or session expired. Please sign in again.');
+        }
+
+        let errorMessage = `Failed to restore backup (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string | Array<{ msg?: string }> };
+          if (typeof errorJson.detail === 'string') {
+            errorMessage = errorJson.detail;
+          } else if (Array.isArray(errorJson.detail)) {
+            errorMessage = errorJson.detail
+              .map((e) => e.msg || '')
+              .filter(Boolean)
+              .join(', ');
+          }
+        } catch {
+          // fallback
+        }
+
+        if (response.status === 429) {
+          errorMessage = this.formatErrorMessage(response, errorMessage);
+        } else if (response.status === 503) {
+          errorMessage = 'Firebase Firestore is not configured on the backend.';
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as BackupRestoreResponse;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new Error('Backup restore timed out after 45 seconds.');
+        }
+        if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch')) {
+          throw new Error(
+            `Unable to connect to MeetMind AI backend at ${this.baseUrl} to restore backup.`
+          );
+        }
+        throw err;
+      }
+      throw new Error('An unexpected error occurred while restoring meeting backup.');
     } finally {
       clearTimeout(timeoutId);
     }

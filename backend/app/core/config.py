@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_BULK_DELETE: str = "5/minute"
     RATE_LIMIT_ACCOUNT_DELETE: str = "5/minute"
     RATE_LIMIT_PREFERENCES: str = "30/minute"
+    RATE_LIMIT_BACKUP: str = "10/minute"
+    RATE_LIMIT_RESTORE: str = "5/minute"
     RATE_LIMIT_REDIS_URL: Optional[str] = None
     RATE_LIMIT_FAIL_CLOSED: Optional[bool] = None
     RATE_LIMIT_REDIS_REQUIRED: bool = False

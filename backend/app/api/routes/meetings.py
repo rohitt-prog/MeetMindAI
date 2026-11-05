@@ -15,6 +15,11 @@ from app.schemas.meeting import (
     MeetingListItem,
     MeetingPdfExportRequest,
 )
+from app.schemas.backup import (
+    MeetingBackupPayload,
+    BackupRestorePayload,
+    BackupRestoreResponse,
+)
 from app.services.gemini_service import (
     gemini_service,
     GeminiConfigError,
@@ -299,6 +304,111 @@ def export_meeting_pdf(
         )
     except Exception as e:
         logger.exception(f"Failed to generate meeting report PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal server error occurred while processing your request. Please try again later.",
+        )
+
+
+@router.get(
+    "/backup",
+    response_model=MeetingBackupPayload,
+    status_code=status.HTTP_200_OK,
+    summary="Export Meeting Data as JSON Backup",
+    description="Exports all saved meeting records owned by the authenticated user as a structured, sanitized JSON backup.",
+)
+def export_user_backup(
+    current_user: AuthenticatedUser = Depends(require_rate_limit("backup_export", lambda: settings.RATE_LIMIT_BACKUP)),
+) -> MeetingBackupPayload:
+    """
+    Endpoint to export a complete JSON backup of all saved meetings owned by the caller.
+    """
+    if not firebase_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase Firestore is not configured. Please configure FIREBASE_PROJECT_ID and credentials in backend/.env.",
+        )
+
+    try:
+        return firebase_service.export_user_backup(
+            owner_uid=current_user.uid,
+            email=current_user.email,
+            is_demo_user=getattr(current_user, "is_demo_user", False),
+        )
+    except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in export_user_backup: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
+        )
+    except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in export_user_backup: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error exporting backup for user {current_user.uid}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal server error occurred while processing your request. Please try again later.",
+        )
+
+
+@router.post(
+    "/restore",
+    response_model=BackupRestoreResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Restore Meeting Data from JSON Backup",
+    description="Validates and restores meeting records from an uploaded JSON backup file for the authenticated user.",
+)
+def restore_user_backup(
+    payload: BackupRestorePayload,
+    conflict_strategy: Optional[str] = Query(
+        default=None,
+        pattern="^(skip|overwrite)$",
+        description="Conflict strategy when a meeting ID already exists for the user: 'skip' (default) or 'overwrite'",
+    ),
+    current_user: AuthenticatedUser = Depends(require_rate_limit("backup_restore", lambda: settings.RATE_LIMIT_RESTORE)),
+) -> BackupRestoreResponse:
+    """
+    Endpoint to validate and restore meetings from a backup payload.
+    Enforces all-or-nothing validation, user ownership isolation, and safe conflict handling.
+    """
+    if not firebase_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase Firestore is not configured. Please configure FIREBASE_PROJECT_ID and credentials in backend/.env.",
+        )
+
+    effective_strategy = conflict_strategy or payload.conflict_strategy or "skip"
+
+    try:
+        return firebase_service.restore_user_backup(
+            owner_uid=current_user.uid,
+            backup=payload,
+            conflict_strategy=effective_strategy,
+        )
+    except ValueError as e:
+        logger.warning(f"Validation failure in restore_user_backup for user '{current_user.uid}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except FirebaseConfigError as e:
+        logger.error(f"Firebase configuration error in restore_user_backup: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
+        )
+    except FirebaseOperationError as e:
+        logger.error(f"Firebase operation error in restore_user_backup: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream database service is temporarily unavailable. Please try again."),
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error restoring backup for user {current_user.uid}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal server error occurred while processing your request. Please try again later.",
