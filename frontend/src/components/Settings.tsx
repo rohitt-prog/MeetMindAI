@@ -26,6 +26,7 @@ import {
   Zap,
   Eye,
   EyeOff,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -1482,31 +1483,54 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Card 5: Upcoming Capabilities (Roadmap) */}
+          {/* Card 5: PDF Export & Report Styling (Phase 2D Status & Roadmap) */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
             <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-                <Sparkles className="w-4 h-4" />
+                <FileText className="w-4 h-4" />
               </div>
               <div>
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Upcoming Preferences
+                  PDF Export & Report Styling
                 </h2>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Planned customization features for upcoming phases
+                  Publication-grade ReportLab document styling and preference status
                 </p>
               </div>
             </div>
 
             <div className="mt-5 space-y-3">
-              <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-start justify-between gap-3">
-                <div className="space-y-0.5">
+              {/* Active: Phase 2D Document Styling */}
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 flex items-start justify-between gap-3">
+                <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">PDF Export Formatting & Branding</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2D</span>
+                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      MeetMind AI Executive Styling
+                    </span>
+                    <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      <span>Phase 2D Active</span>
+                    </span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Custom corporate branding, layout density, and executive summary styles.
+                    Built-in MeetMind AI branding, executive summary callout block, structured action item tables, and two-pass running headers/footers are active on all meeting PDF downloads.
+                  </p>
+                </div>
+              </div>
+
+              {/* Pending: Future Customization */}
+              <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/20 flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Custom Corporate Branding & Density
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 rounded">
+                      Planned
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    User-uploaded organization logos, custom color palette overrides, and adjustable layout density controls are planned for future updates.
                   </p>
                 </div>
               </div>

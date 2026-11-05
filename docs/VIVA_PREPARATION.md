@@ -16,7 +16,7 @@ This guide is designed for Computer Science & Engineering (AI/ML/Software Engine
 >
 > *Finally, MeetMind AI compiles publication-grade, multi-page meeting reports via a server-side **ReportLab PDF engine** with branded executive styling, and provides enterprise data portability via a validated **JSON backup and restore engine**.*
 >
-> *The system is built with React 18, Vite, TypeScript, and Tailwind CSS on the frontend, and Python 3.11 with FastAPI on the backend, validated by 154 automated backend tests (153 passed, 1 skipped) and 85 frontend unit and integration tests as of our Phase 5 QA baseline."*
+> *The system is built with React 18, Vite, TypeScript, and Tailwind CSS on the frontend, and Python 3.11 with FastAPI on the backend, validated by 154 automated backend tests (153 passed, 1 skipped) and 86 frontend unit and integration tests as of our Phase 5 QA baseline."*
 
 ---
 
@@ -378,7 +378,7 @@ This updates the document without altering its ID or creating extra rows.
 #### Q26: What is the testing strategy for the project?
 **Answer:** We follow a test-driven, pyramid-based testing strategy:
 - **Backend (Pytest)**: 154 automated tests (153 passed, 1 skipped when external Redis is offline as of Phase 5 QA baseline) covering route validations, schema invariants, health probes, CORS, mocked Gemini extraction, ambiguity classification, clarification merging, Firestore persistence, bulk deletions, account cascade deletions, model selection & BYOK validation, JSON backup export, schema v1.0 restore validation, conflict resolution, ID collision handling, ReportLab PDF compiling, Bearer auth verification, user ownership isolation, Redis Lua rate limiting, request size limits, and security headers.
-- **Frontend (Node Test Runner)**: 85 automated tests via `node:test` covering API client contracts, 404 fallbacks, timeout aborts, Bearer token injection, single 401 retry, demo authentication, immediate BYOK credential purge on 401, theme resolution, bulk deletion modal flows, account deletion flows, backup export/restore flows, 429 rate limit error parsing with `Retry-After`, and payload bounds.
+- **Frontend (Node Test Runner)**: 86 automated tests via `node:test` covering API client contracts, 404 fallbacks, timeout aborts, Bearer token injection, single 401 retry, demo authentication, immediate BYOK credential purge on 401, theme resolution, bulk deletion modal flows, account deletion flows, backup export/restore flows, 429 rate limit error parsing with `Retry-After`, and payload bounds.
 - **Zero-Credential CI**: All tests use mocked Gemini and Firestore clients, executing cleanly in zero-credential environments without live API keys or cloud dependencies.
 
 #### Q27: How is CORS configured securely in production?

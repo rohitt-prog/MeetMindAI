@@ -479,7 +479,7 @@ The system is validated through automated test suites requiring zero live creden
   - `test_backup_restore.py` (41 tests): Backup export, JSON schema v1.0 validation, conflict strategies (`skip` vs `overwrite`), cross-user overwrite prevention, and unique ID collision handling.
   - `test_pdf_export.py` (11 tests): ReportLab compiling, branded layout, Unicode glyph sanitization, and saved report exports.
   - `test_health.py` (4 tests): Health probes and CORS headers.
-- **Frontend Test Suite (`node:test`)**: 85 unit and integration tests (85 passed as of Phase 5 QA baseline).
+- **Frontend Test Suite (`node:test`)**: 86 unit and integration tests (86 passed as of Phase 5 QA baseline).
   - API client contracts, 404 fallbacks, AbortController request timeouts.
   - Bearer token injection, single 401 retry with token refresh, demo account authentication.
   - Immediate BYOK credential purge on 401 unauthorization.

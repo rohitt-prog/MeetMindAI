@@ -52,7 +52,7 @@ Designed with production standards, MeetMind AI emphasizes clean architectural s
 - **Icons**: Lucide React
 - **Identity Client**: Firebase Web SDK (`firebase/app`, `firebase/auth`)
 - **API Client**: Centralized Fetch client (`apiService`) with automatic Bearer token attachment, transparent single-retry on 401 with token refresh, and binary Blob handlers
-- **Testing**: Native Node.js test runner (`node:test`, 85 automated unit and integration tests as of Phase 5 QA baseline)
+- **Testing**: Native Node.js test runner (`node:test`, 86 automated unit and integration tests as of Phase 5 QA baseline)
 
 ### Backend
 - **Framework**: Python 3.11+ with FastAPI 0.115+
@@ -206,7 +206,7 @@ meetmind-ai/
 │   │   ├── main.tsx            # React DOM mounting entrypoint
 │   │   └── vite-env.d.ts       # Vite environment type declarations
 │   ├── tests/
-│   │   └── api.test.mjs        # Frontend unit & integration tests (85 tests via node:test)
+│   │   └── api.test.mjs        # Frontend unit & integration tests (86 tests via node:test)
 │   ├── .env.example            # Frontend environment variable template
 │   ├── index.html              # HTML shell entrypoint
 │   ├── package.json            # Frontend dependencies & build scripts
@@ -414,7 +414,7 @@ The backend will be available at `http://localhost:8000`.
    npm install
    ```
 
-3. **Run automated unit & integration tests (85 tests as of Phase 5 QA baseline)**:
+3. **Run automated unit & integration tests (86 tests as of Phase 5 QA baseline)**:
    ```bash
    npm test
    ```
@@ -447,7 +447,7 @@ All automated tests run with mocked Gemini and Firestore clients, ensuring 100% 
   - Cascade account deletion with batched meeting purge before Firebase Auth removal.
   - JSON backup export, schema v1.0 validation, metrics integrity check, all-or-nothing restore, and collision-resistant unique ID allocation.
   - ReportLab PDF compilation with brand header, executive summary callout, Unicode glyph safety, and multi-page flow.
-- **Frontend**: 85 unit and integration tests via native Node.js test runner (`node:test` as of Phase 5 QA baseline).
+- **Frontend**: 86 unit and integration tests via native Node.js test runner (`node:test` as of Phase 5 QA baseline).
   - API client contracts, 404 fallbacks, AbortController request timeouts.
   - Bearer token injection, single 401 retry with token refresh, demo account authentication.
   - Immediate purge of custom Gemini key and model overrides upon 401 unauthorization.

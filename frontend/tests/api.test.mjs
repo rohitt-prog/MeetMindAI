@@ -1,5 +1,12 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const SETTINGS_COMPONENT_PATH = resolve(__dirname, '../src/components/Settings.tsx');
 
 // Mock ApiService implementation for node test suite to mirror frontend/src/services/api.ts
 class ApiServiceTestClient {
@@ -1867,6 +1874,71 @@ describe('Frontend API Service & State Integration Tests', () => {
       assert.equal(health.status, 'ok');
       assert.equal(health.app, 'MeetMind AI');
       assert.ok(latencyMs >= 10, 'Latency should reflect elapsed network duration');
+    });
+
+    it('Settings UI regression: verifies Phase 2D PDF styling is active, customization is planned, and obsolete Upcoming Preferences is removed', () => {
+      const settingsSource = readFileSync(SETTINGS_COMPONENT_PATH, 'utf-8');
+
+      // 1. Regression Guard: Ensure the obsolete "Upcoming Preferences" section and Phase 2D roadmap placeholder are completely removed
+      assert.doesNotMatch(
+        settingsSource,
+        /Upcoming Preferences/,
+        'Settings component must not render obsolete "Upcoming Preferences" heading'
+      );
+      assert.doesNotMatch(
+        settingsSource,
+        /Planned customization features for upcoming phases/,
+        'Settings component must not contain stale upcoming roadmap subtitle'
+      );
+      assert.doesNotMatch(
+        settingsSource,
+        /<span[^>]*>\s*Phase 2D\s*<\/span>/,
+        'Settings component must not display raw "Phase 2D" badge as an upcoming preference'
+      );
+
+      // 2. Verified Active Capability: PDF Export & Report Styling header and Phase 2D Active badge
+      assert.match(
+        settingsSource,
+        /<h2[^>]*>\s*PDF Export & Report Styling\s*<\/h2>/,
+        'Settings component must display "PDF Export & Report Styling" card heading'
+      );
+      assert.match(
+        settingsSource,
+        /Publication-grade ReportLab document styling and preference status/,
+        'Settings component must display accurate styling subtitle'
+      );
+      assert.match(
+        settingsSource,
+        /MeetMind AI Executive Styling/,
+        'Settings component must list MeetMind AI Executive Styling'
+      );
+      assert.match(
+        settingsSource,
+        /Phase 2D Active/,
+        'Settings component must explicitly mark Phase 2D as Active'
+      );
+      assert.match(
+        settingsSource,
+        /Built-in MeetMind AI branding, executive summary callout block, structured action item tables, and two-pass running headers\/footers are active/,
+        'Settings component must describe active Phase 2D document styling capabilities'
+      );
+
+      // 3. Separated Planned Capability: Custom Corporate Branding & Density
+      assert.match(
+        settingsSource,
+        /Custom Corporate Branding & Density/,
+        'Settings component must separate custom corporate branding as distinct planned feature'
+      );
+      assert.match(
+        settingsSource,
+        /<span[^>]*>\s*Planned\s*<\/span>/,
+        'Settings component must identify unimplemented branding & density controls as Planned'
+      );
+      assert.match(
+        settingsSource,
+        /User-uploaded organization logos, custom color palette overrides, and adjustable layout density controls are planned/,
+        'Settings component must describe future customization scope without claiming it is available'
+      );
     });
   });
 
