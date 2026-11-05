@@ -48,6 +48,7 @@ class FirebaseService:
         self._app: Optional[firebase_admin.App] = None
         self._client: Optional[FirestoreClient] = None
         self._collection_name: str = settings.FIRESTORE_COLLECTION_MEETINGS
+        self._preferences_collection_name: str = settings.FIRESTORE_COLLECTION_PREFERENCES
 
     def is_configured(self) -> bool:
         """
@@ -536,6 +537,12 @@ class FirebaseService:
         # Step 1: Delete all Firestore application data
         meetings_deleted = self.delete_all_user_meetings(owner_uid=clean_uid)
 
+        # Delete user model preferences if present
+        try:
+            self.delete_user_preferences(owner_uid=clean_uid)
+        except Exception as e:
+            logger.warning(f"Could not delete preferences for user '{clean_uid}' during account erasure: {e}")
+
         # Step 2: Delete Firebase Authentication user record
         try:
             self.delete_user_account(uid=clean_uid)
@@ -555,6 +562,108 @@ class FirebaseService:
             f"Successfully completed account erasure for user '{clean_uid}' ({meetings_deleted} meetings deleted)."
         )
         return meetings_deleted
+
+    def get_user_preferences(self, owner_uid: str) -> Dict[str, Any]:
+        """
+        Retrieves user preferences document from Firestore by owner_uid.
+        Returns default preferences if document does not exist or Firebase is unconfigured.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            raise ValueError("User UID cannot be empty.")
+        clean_uid = str(owner_uid).strip()
+
+        default_result = {
+            "selected_model": settings.GEMINI_MODEL,
+            "supported_models": settings.SUPPORTED_GEMINI_MODELS,
+            "default_model": settings.DEFAULT_GEMINI_MODEL,
+        }
+
+        if not self.is_configured():
+            return default_result
+
+        db = self.get_client()
+        try:
+            doc_ref = db.collection(self._preferences_collection_name).document(clean_uid)
+            snapshot = doc_ref.get()
+        except Exception as e:
+            logger.error(f"Error reading user preferences for '{clean_uid}': {e}")
+            raise FirebaseOperationError(f"Failed to read user preferences: {str(e)}")
+
+        if not snapshot.exists:
+            return default_result
+
+        data = snapshot.to_dict() or {}
+        selected = data.get("selected_model", settings.GEMINI_MODEL)
+        if selected not in settings.SUPPORTED_GEMINI_MODELS:
+            selected = settings.GEMINI_MODEL
+
+        return {
+            "selected_model": selected,
+            "supported_models": settings.SUPPORTED_GEMINI_MODELS,
+            "default_model": settings.DEFAULT_GEMINI_MODEL,
+        }
+
+    def save_user_preferences(self, owner_uid: str, selected_model: str) -> Dict[str, Any]:
+        """
+        Saves user model preferences document to Firestore scoped strictly to owner_uid.
+        Validates model against supported allowlist.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            raise ValueError("User UID cannot be empty.")
+        clean_uid = str(owner_uid).strip()
+
+        if selected_model not in settings.SUPPORTED_GEMINI_MODELS:
+            raise ValueError(
+                f"Invalid model '{selected_model}'. Supported models are: {', '.join(settings.SUPPORTED_GEMINI_MODELS)}."
+            )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        pref_data = {
+            "owner_uid": clean_uid,
+            "selected_model": selected_model,
+            "updated_at": now_iso,
+        }
+
+        if not self.is_configured():
+            return {
+                "selected_model": selected_model,
+                "supported_models": settings.SUPPORTED_GEMINI_MODELS,
+                "default_model": settings.DEFAULT_GEMINI_MODEL,
+            }
+
+        db = self.get_client()
+        try:
+            doc_ref = db.collection(self._preferences_collection_name).document(clean_uid)
+            doc_ref.set(pref_data)
+            logger.info(f"Saved user preferences for '{clean_uid}': model={selected_model}")
+            return {
+                "selected_model": selected_model,
+                "supported_models": settings.SUPPORTED_GEMINI_MODELS,
+                "default_model": settings.DEFAULT_GEMINI_MODEL,
+            }
+        except Exception as e:
+            logger.error(f"Failed to save user preferences for '{clean_uid}': {e}")
+            raise FirebaseOperationError(f"Failed to save user preferences: {str(e)}")
+
+    def delete_user_preferences(self, owner_uid: str) -> None:
+        """
+        Deletes the user preferences document for owner_uid if it exists.
+        """
+        if not owner_uid or not str(owner_uid).strip():
+            raise ValueError("User UID cannot be empty.")
+        clean_uid = str(owner_uid).strip()
+
+        if not self.is_configured():
+            return
+
+        db = self.get_client()
+        try:
+            doc_ref = db.collection(self._preferences_collection_name).document(clean_uid)
+            doc_ref.delete()
+            logger.info(f"Deleted user preferences for '{clean_uid}'.")
+        except Exception as e:
+            logger.error(f"Failed to delete user preferences for '{clean_uid}': {e}")
+            raise FirebaseOperationError(f"Failed to delete user preferences: {str(e)}")
 
 
 firebase_service = FirebaseService()

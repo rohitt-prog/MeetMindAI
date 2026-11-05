@@ -116,6 +116,25 @@ export interface AccountDeleteResponse {
   message: string;
 }
 
+export interface UserPreferencesResponse {
+  selected_model: string;
+  supported_models: string[];
+  default_model: string;
+}
+
+export interface UserPreferencesUpdateRequest {
+  selected_model: string;
+}
+
+export interface ValidateKeyRequest {
+  api_key?: string;
+}
+
+export interface ValidateKeyResponse {
+  valid: boolean;
+  message: string;
+}
+
 export interface BackupUserSummary {
   uid: string;
   email: string | null;

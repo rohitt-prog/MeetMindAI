@@ -60,6 +60,35 @@ class GeminiService:
         """
         self._client = client
 
+    def create_client(self, api_key: str) -> genai.Client:
+        """
+        Creates an ephemeral Google GenAI client instance using the provided API key.
+        Never persists or caches this client instance on self to ensure per-request isolation.
+        """
+        if not api_key or not api_key.strip() or api_key == "your_gemini_api_key_here":
+            raise GeminiConfigError("Invalid or empty Gemini API key provided.")
+        try:
+            return genai.Client(api_key=api_key.strip())
+        except Exception as e:
+            logger.error("Failed to initialize Google GenAI client with provided key.")
+            raise GeminiConfigError("Failed to initialize Gemini client with provided configuration.")
+
+    def validate_api_key(self, api_key: str) -> bool:
+        """
+        Validates a user-provided Gemini API key by making a lightweight API call.
+        Does not log the API key or persist the client.
+        """
+        if not api_key or not api_key.strip() or api_key == "your_gemini_api_key_here":
+            return False
+
+        try:
+            client = self.create_client(api_key.strip())
+            client.models.get(model=settings.DEFAULT_GEMINI_MODEL)
+            return True
+        except Exception:
+            logger.warning("User-provided BYOK key validation failed.")
+            return False
+
     def _build_analysis_prompt(self, transcript: str, title: Optional[str] = None) -> str:
         """
         Builds the prompt instructing Gemini to analyze the meeting transcript
@@ -143,15 +172,22 @@ class GeminiService:
         self,
         transcript: str,
         title: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> MeetingAnalysisResponse:
         """
         Analyzes a raw meeting transcript using Gemini and returns structured meeting insights
-        with ambiguity detection.
+        with ambiguity detection. Supports custom target model and optional BYOK API key.
         """
         if not transcript or not transcript.strip():
             raise ValueError("Meeting transcript cannot be empty.")
 
-        client = self._get_client()
+        target_model = model or self._model
+        if api_key:
+            client = self.create_client(api_key)
+        else:
+            client = self._get_client()
+
         prompt = self._build_analysis_prompt(transcript, title)
 
         config = types.GenerateContentConfig(
@@ -161,13 +197,17 @@ class GeminiService:
         )
 
         try:
-            logger.info(f"Submitting transcript analysis request to Gemini model: {self._model}")
+            logger.info(f"Submitting transcript analysis request to Gemini model: {target_model}")
             response = client.models.generate_content(
-                model=self._model,
+                model=target_model,
                 contents=prompt,
                 config=config,
             )
         except Exception as e:
+            if api_key:
+                logger.error("Error during Gemini API call with custom BYOK key")
+                sanitized_msg = str(e).replace(api_key, "[REDACTED]")
+                raise GeminiAnalysisError(f"Gemini API request failed using provided API key: {sanitized_msg}")
             logger.error(f"Error during Gemini API call: {e}")
             raise GeminiAnalysisError(f"Gemini API request failed: {str(e)}")
 
@@ -185,9 +225,12 @@ class GeminiService:
         self,
         analysis: MeetingAnalysisResponse,
         answers: List[ClarificationAnswer],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> MeetingAnalysisResponse:
         """
         Re-evaluates and updates an existing meeting analysis based on submitted clarification answers.
+        Supports custom target model and optional BYOK API key.
         """
         if not answers:
             raise ValueError("At least one clarification answer must be provided.")
@@ -203,7 +246,12 @@ class GeminiService:
             if not ans.answer or not ans.answer.strip():
                 raise ValueError("Clarification answer cannot be empty or contain only whitespace.")
 
-        client = self._get_client()
+        target_model = model or self._model
+        if api_key:
+            client = self.create_client(api_key)
+        else:
+            client = self._get_client()
+
         prompt = self._build_clarification_prompt(analysis, answers)
 
         config = types.GenerateContentConfig(
@@ -213,13 +261,17 @@ class GeminiService:
         )
 
         try:
-            logger.info(f"Submitting clarification resolution request to Gemini model: {self._model}")
+            logger.info(f"Submitting clarification resolution request to Gemini model: {target_model}")
             response = client.models.generate_content(
-                model=self._model,
+                model=target_model,
                 contents=prompt,
                 config=config,
             )
         except Exception as e:
+            if api_key:
+                logger.error("Error during Gemini clarification API call with custom BYOK key")
+                sanitized_msg = str(e).replace(api_key, "[REDACTED]")
+                raise GeminiAnalysisError(f"Gemini API request failed using provided API key: {sanitized_msg}")
             logger.error(f"Error during Gemini clarification API call: {e}")
             raise GeminiAnalysisError(f"Gemini API request failed: {str(e)}")
 

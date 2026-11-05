@@ -148,13 +148,15 @@ function AppContent() {
     return () => clearInterval(interval);
   }, [checkBackendHealth]);
 
-  // When user signs in or changes, refresh meetings and workspace
+  // When user signs in or changes, refresh meetings, workspace, and model preferences
   useEffect(() => {
     if (user) {
       fetchRecentMeetings();
+      apiService.getUserPreferences().catch(() => {});
     } else {
       setRecentMeetings([]);
       handleResetMeeting();
+      apiService.clearCustomModelAndKey();
     }
   }, [user, fetchRecentMeetings]);
 

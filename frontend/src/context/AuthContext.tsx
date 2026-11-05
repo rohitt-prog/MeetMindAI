@@ -186,6 +186,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         if (!sessionStorage.getItem('meetmind_demo_user')) {
           setUser(null);
+          apiService.clearCustomModelAndKey();
         }
       }
       setLoading(false);
@@ -399,6 +400,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       sessionStorage.removeItem('meetmind_demo_user');
       setUser(null);
       setAuthError(null);
+      apiService.clearCustomModelAndKey();
     } catch (err: unknown) {
       console.error('Logout error:', err);
     } finally {

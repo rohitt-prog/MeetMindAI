@@ -9,6 +9,8 @@ import {
   MeetingListItem,
   MeetingDetailResponse,
   MeetingPdfExportRequest,
+  UserPreferencesResponse,
+  ValidateKeyResponse,
 } from '../types/index';
 
 /**
@@ -27,9 +29,48 @@ class ApiService {
   private baseUrl: string;
   private authTokenGetter: AuthTokenGetter | null = null;
   private onUnauthorized: (() => void) | null = null;
+  private customApiKey: string | null = null;
+  private customModel: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
+
+  /**
+   * Sets or clears an ephemeral user-provided Gemini API key (BYOK).
+   * Stored in active runtime memory only; never persisted to localStorage/sessionStorage.
+   */
+  setCustomApiKey(key: string | null): void {
+    this.customApiKey = key && key.trim() ? key.trim() : null;
+  }
+
+  /**
+   * Retrieves the currently active in-memory custom Gemini API key, if configured.
+   */
+  getCustomApiKey(): string | null {
+    return this.customApiKey;
+  }
+
+  /**
+   * Sets or clears an active in-memory Gemini model selection (e.g. 'gemini-2.5-pro').
+   */
+  setCustomModel(model: string | null): void {
+    this.customModel = model && model.trim() ? model.trim() : null;
+  }
+
+  /**
+   * Retrieves the currently active in-memory custom Gemini model.
+   */
+  getCustomModel(): string | null {
+    return this.customModel;
+  }
+
+  /**
+   * Clears any active custom model and ephemeral API key from memory (e.g. upon logout).
+   */
+  clearCustomModelAndKey(): void {
+    this.customApiKey = null;
+    this.customModel = null;
   }
 
   /**
@@ -111,10 +152,14 @@ class ApiService {
 
   /**
    * Triggers the unauthorized handler when a 401 status is encountered.
+   * Immediately clears in-memory BYOK credentials and custom model selection.
    */
   private handleUnauthorizedResponse(status: number): void {
-    if (status === 401 && this.onUnauthorized) {
-      this.onUnauthorized();
+    if (status === 401) {
+      this.clearCustomModelAndKey();
+      if (this.onUnauthorized) {
+        this.onUnauthorized();
+      }
     }
   }
 
@@ -188,12 +233,20 @@ class ApiService {
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
+      const requestHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (this.customApiKey) {
+        requestHeaders['X-Gemini-API-Key'] = this.customApiKey;
+      }
+      if (this.customModel) {
+        requestHeaders['X-Gemini-Model'] = this.customModel;
+      }
+
       const response = await this.fetchWithAuth(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify(request),
         signal: controller.signal,
       });
@@ -260,12 +313,20 @@ class ApiService {
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
+      const requestHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (this.customApiKey) {
+        requestHeaders['X-Gemini-API-Key'] = this.customApiKey;
+      }
+      if (this.customModel) {
+        requestHeaders['X-Gemini-Model'] = this.customModel;
+      }
+
       const response = await this.fetchWithAuth(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify(request),
         signal: controller.signal,
       });
@@ -751,6 +812,118 @@ class ApiService {
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Retrieves the current user's AI model preferences from the backend.
+   * Calls GET /api/preferences
+   */
+  async getUserPreferences(): Promise<UserPreferencesResponse> {
+    const url = `${this.baseUrl}/api/preferences`;
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required to retrieve preferences.');
+        }
+        let errorMessage = `Failed to get preferences (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = (await response.json()) as UserPreferencesResponse;
+      // Sync in-memory model if not explicitly overridden
+      if (!this.customModel) {
+        this.customModel = data.selected_model;
+      }
+      return data;
+    } catch (err: unknown) {
+      if (err instanceof Error) throw err;
+      throw new Error('An unexpected error occurred while fetching user preferences.');
+    }
+  }
+
+  /**
+   * Updates the authenticated user's preferred AI model.
+   * Calls PUT /api/preferences
+   */
+  async updateUserPreferences(selectedModel: string): Promise<UserPreferencesResponse> {
+    const url = `${this.baseUrl}/api/preferences`;
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ selected_model: selectedModel }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Authentication required to update preferences.');
+        }
+        let errorMessage = `Failed to update preferences (${response.status})`;
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = (await response.json()) as UserPreferencesResponse;
+      this.customModel = data.selected_model;
+      return data;
+    } catch (err: unknown) {
+      if (err instanceof Error) throw err;
+      throw new Error('An unexpected error occurred while updating user preferences.');
+    }
+  }
+
+  /**
+   * Validates a custom Gemini API key (BYOK) via the backend verification probe.
+   * Calls POST /api/preferences/validate-key
+   */
+  async validateApiKey(apiKey: string): Promise<ValidateKeyResponse> {
+    const url = `${this.baseUrl}/api/preferences/validate-key`;
+    try {
+      const response = await this.fetchWithAuth(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Gemini-API-Key': apiKey.trim(),
+        },
+        body: JSON.stringify({ api_key: apiKey.trim() }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Invalid Gemini API key or insufficient permissions.';
+        try {
+          const errorJson = (await response.json()) as { detail?: string };
+          if (errorJson.detail) errorMessage = errorJson.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(errorMessage);
+      }
+
+      return (await response.json()) as ValidateKeyResponse;
+    } catch (err: unknown) {
+      if (err instanceof Error) throw err;
+      throw new Error('Failed to validate Gemini API key.');
+    }
   }
 
   /**

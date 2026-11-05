@@ -28,12 +28,15 @@ class Settings(BaseSettings):
     # Google Gemini Configuration
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    DEFAULT_GEMINI_MODEL: str = "gemini-2.5-flash"
+    SUPPORTED_GEMINI_MODELS: List[str] = ["gemini-2.5-flash", "gemini-2.5-pro"]
 
     # Firebase Configuration (Cloud Firestore & Authentication)
     FIREBASE_PROJECT_ID: Optional[str] = None
     FIREBASE_CREDENTIALS_PATH: Optional[str] = None
     FIREBASE_CREDENTIALS_JSON: Optional[str] = None
     FIRESTORE_COLLECTION_MEETINGS: str = "meetings"
+    FIRESTORE_COLLECTION_PREFERENCES: str = "user_preferences"
     FIREBASE_AUTH_ENABLED: bool = True
 
     # Rate Limiting Configuration (Phase 12)
@@ -42,6 +45,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_PDF: str = "20/minute"
     RATE_LIMIT_BULK_DELETE: str = "5/minute"
     RATE_LIMIT_ACCOUNT_DELETE: str = "5/minute"
+    RATE_LIMIT_PREFERENCES: str = "30/minute"
     RATE_LIMIT_REDIS_URL: Optional[str] = None
     RATE_LIMIT_FAIL_CLOSED: Optional[bool] = None
     RATE_LIMIT_REDIS_REQUIRED: bool = False

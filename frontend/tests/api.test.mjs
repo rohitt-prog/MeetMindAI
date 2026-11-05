@@ -7,6 +7,29 @@ class ApiServiceTestClient {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.authTokenGetter = null;
     this.onUnauthorized = null;
+    this.customApiKey = null;
+    this.customModel = null;
+  }
+
+  setCustomApiKey(key) {
+    this.customApiKey = key && key.trim() ? key.trim() : null;
+  }
+
+  getCustomApiKey() {
+    return this.customApiKey;
+  }
+
+  setCustomModel(model) {
+    this.customModel = model && model.trim() ? model.trim() : null;
+  }
+
+  getCustomModel() {
+    return this.customModel;
+  }
+
+  clearCustomModelAndKey() {
+    this.customApiKey = null;
+    this.customModel = null;
   }
 
   setAuthTokenGetter(getter) {
@@ -64,8 +87,11 @@ class ApiServiceTestClient {
   }
 
   handleUnauthorizedResponse(status) {
-    if (status === 401 && this.onUnauthorized) {
-      this.onUnauthorized();
+    if (status === 401) {
+      this.clearCustomModelAndKey();
+      if (this.onUnauthorized) {
+        this.onUnauthorized();
+      }
     }
   }
 
@@ -125,12 +151,20 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
+      const requestHeaders = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (this.customApiKey) {
+        requestHeaders['X-Gemini-API-Key'] = this.customApiKey;
+      }
+      if (this.customModel) {
+        requestHeaders['X-Gemini-Model'] = this.customModel;
+      }
+
       const response = await this.fetchWithAuth(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify(request),
         signal: controller.signal,
       });
@@ -190,12 +224,20 @@ class ApiServiceTestClient {
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
+      const requestHeaders = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (this.customApiKey) {
+        requestHeaders['X-Gemini-API-Key'] = this.customApiKey;
+      }
+      if (this.customModel) {
+        requestHeaders['X-Gemini-Model'] = this.customModel;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify(request),
         signal: controller.signal,
       });
@@ -584,6 +626,73 @@ class ApiServiceTestClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async getUserPreferences() {
+    const url = `${this.baseUrl}/api/preferences`;
+    const response = await this.fetchWithAuth(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('Authentication required');
+      let errorMessage = `Failed to get preferences (${response.status})`;
+      try {
+        const errorJson = await response.json();
+        if (errorJson.detail) errorMessage = errorJson.detail;
+      } catch {}
+      throw new Error(errorMessage);
+    }
+    const data = await response.json();
+    if (!this.customModel) {
+      this.customModel = data.selected_model;
+    }
+    return data;
+  }
+
+  async updateUserPreferences(selectedModel) {
+    const url = `${this.baseUrl}/api/preferences`;
+    const response = await this.fetchWithAuth(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ selected_model: selectedModel }),
+    });
+    if (!response.ok) {
+      let errorMessage = `Failed to update preferences (${response.status})`;
+      try {
+        const errorJson = await response.json();
+        if (errorJson.detail) errorMessage = errorJson.detail;
+      } catch {}
+      throw new Error(errorMessage);
+    }
+    const data = await response.json();
+    this.customModel = data.selected_model;
+    return data;
+  }
+
+  async validateApiKey(apiKey) {
+    const url = `${this.baseUrl}/api/preferences/validate-key`;
+    const response = await this.fetchWithAuth(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Gemini-API-Key': apiKey.trim(),
+      },
+      body: JSON.stringify({ api_key: apiKey.trim() }),
+    });
+    if (!response.ok) {
+      let errorMessage = 'Invalid Gemini API key or insufficient permissions.';
+      try {
+        const errorJson = await response.json();
+        if (errorJson.detail) errorMessage = errorJson.detail;
+      } catch {}
+      throw new Error(errorMessage);
+    }
+    return await response.json();
   }
 }
 
@@ -2461,6 +2570,264 @@ describe('Frontend API Service & State Integration Tests', () => {
       assert.equal(res.meetings_deleted, 3);
       assert.ok(typeof res.message === 'string');
       assert.equal(res.user_id, undefined, 'user_id must not be present in response');
+    });
+  });
+
+  describe('Phase 2C Custom Model Selection & BYOK', () => {
+    let client;
+    let originalFetch;
+
+    beforeEach(() => {
+      client = new ApiServiceTestClient('http://localhost:8000');
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      client.clearCustomModelAndKey();
+    });
+
+    it('Default model selection: retrieves user preferences with default gemini-2.5-flash', async () => {
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, 'http://localhost:8000/api/preferences');
+        assert.equal(options.method, 'GET');
+        return new Response(
+          JSON.stringify({
+            selected_model: 'gemini-2.5-flash',
+            supported_models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+            default_model: 'gemini-2.5-flash',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const prefs = await client.getUserPreferences();
+      assert.equal(prefs.selected_model, 'gemini-2.5-flash');
+      assert.deepEqual(prefs.supported_models, ['gemini-2.5-flash', 'gemini-2.5-pro']);
+      assert.equal(prefs.default_model, 'gemini-2.5-flash');
+      assert.equal(client.getCustomModel(), 'gemini-2.5-flash');
+    });
+
+    it('Switching between Flash and Pro: updates preference to gemini-2.5-pro and syncs in-memory state', async () => {
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, 'http://localhost:8000/api/preferences');
+        assert.equal(options.method, 'PUT');
+        const body = JSON.parse(options.body);
+        assert.equal(body.selected_model, 'gemini-2.5-pro');
+        return new Response(
+          JSON.stringify({
+            selected_model: 'gemini-2.5-pro',
+            supported_models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+            default_model: 'gemini-2.5-flash',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const updated = await client.updateUserPreferences('gemini-2.5-pro');
+      assert.equal(updated.selected_model, 'gemini-2.5-pro');
+      assert.equal(client.getCustomModel(), 'gemini-2.5-pro');
+    });
+
+    it('Invalid model rejection: surfaces 400 Bad Request detail when unsupported model is sent', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: "Invalid model 'unsupported-model'. Supported models are: gemini-2.5-flash, gemini-2.5-pro.",
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      await assert.rejects(
+        async () => client.updateUserPreferences('unsupported-model'),
+        /Invalid model 'unsupported-model'/
+      );
+    });
+
+    it('BYOK validation: validates API key via POST /api/preferences/validate-key', async () => {
+      let passedKeyHeader = null;
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, 'http://localhost:8000/api/preferences/validate-key');
+        assert.equal(options.method, 'POST');
+        passedKeyHeader = options.headers['X-Gemini-API-Key'];
+        return new Response(
+          JSON.stringify({
+            valid: true,
+            message: 'Gemini API key verified successfully.',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const res = await client.validateApiKey('AIzaSyTestKey123');
+      assert.equal(res.valid, true);
+      assert.equal(passedKeyHeader, 'AIzaSyTestKey123');
+    });
+
+    it('BYOK validation failure: surfaces invalid key error message', async () => {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            detail: 'Invalid Gemini API key or insufficient permissions.',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      await assert.rejects(
+        async () => client.validateApiKey('AIzaSyFailingKey'),
+        /Invalid Gemini API key or insufficient permissions/
+      );
+    });
+
+    it('Meeting processing uses custom model and BYOK key in request headers', async () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSyCustomKey999');
+
+      let capturedHeaders = null;
+      globalThis.fetch = async (url, options) => {
+        capturedHeaders = options.headers;
+        return new Response(
+          JSON.stringify({
+            summary: 'Meeting processed with custom model.',
+            discussion_points: [],
+            decisions: [],
+            action_items: [],
+            clarification_required: false,
+            clarifications: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      await client.analyzeMeeting({ transcript: 'Team meeting sync.' });
+      assert.equal(capturedHeaders['X-Gemini-Model'], 'gemini-2.5-pro');
+      assert.equal(capturedHeaders['X-Gemini-API-Key'], 'AIzaSyCustomKey999');
+    });
+
+    it('Clarification processing attaches custom model and BYOK key headers', async () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSyCustomKey999');
+
+      let capturedHeaders = null;
+      globalThis.fetch = async (url, options) => {
+        capturedHeaders = options.headers;
+        return new Response(
+          JSON.stringify({
+            summary: 'Clarification resolved with custom model.',
+            discussion_points: [],
+            decisions: [],
+            action_items: [],
+            clarification_required: false,
+            clarifications: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      await client.clarifyMeeting({
+        analysis: {
+          summary: 'Original summary',
+          discussion_points: [],
+          decisions: [],
+          action_items: [],
+          clarification_required: true,
+          clarifications: [],
+        },
+        answers: [{ clarification_id: 'clarif_1', answer: 'Confirmed by Alex' }],
+      });
+      assert.equal(capturedHeaders['X-Gemini-Model'], 'gemini-2.5-pro');
+      assert.equal(capturedHeaders['X-Gemini-API-Key'], 'AIzaSyCustomKey999');
+    });
+
+    it('Session isolation: clearCustomModelAndKey wipes in-memory credentials upon logout', () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSySecretSessionKey');
+
+      assert.equal(client.getCustomModel(), 'gemini-2.5-pro');
+      assert.equal(client.getCustomApiKey(), 'AIzaSySecretSessionKey');
+
+      client.clearCustomModelAndKey();
+
+      assert.equal(client.getCustomModel(), null);
+      assert.equal(client.getCustomApiKey(), null);
+    });
+
+    it('Security hardening: 401 unauthorized response immediately clears in-memory BYOK key and model override', async () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSySecretSessionKeyToWipe');
+
+      assert.equal(client.getCustomModel(), 'gemini-2.5-pro');
+      assert.equal(client.getCustomApiKey(), 'AIzaSySecretSessionKeyToWipe');
+
+      let unauthorizedCallbackFired = false;
+      client.setOnUnauthorized(() => {
+        unauthorizedCallbackFired = true;
+        // Verify credentials were already cleared when onUnauthorized callback executes
+        assert.equal(client.getCustomModel(), null, 'Model override must be cleared before callback');
+        assert.equal(client.getCustomApiKey(), null, 'Custom API key must be cleared before callback');
+      });
+
+      globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({ detail: 'Authentication required. Session expired.' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+
+      await assert.rejects(
+        async () => client.getUserPreferences(),
+        /Authentication required/
+      );
+
+      assert.equal(unauthorizedCallbackFired, true, 'onUnauthorized callback should have fired');
+      assert.equal(client.getCustomModel(), null);
+      assert.equal(client.getCustomApiKey(), null);
+
+      client.setOnUnauthorized(null);
+    });
+
+    it('Security hardening: 401 unauthorized clears in-memory BYOK credentials even if onUnauthorized is unset', async () => {
+      client.setCustomModel('gemini-2.5-pro');
+      client.setCustomApiKey('AIzaSySecretSessionKeyToWipe');
+      client.setOnUnauthorized(null);
+
+      globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({ detail: 'Authentication required. Session expired.' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+
+      await assert.rejects(
+        async () => client.getUserPreferences(),
+        /Authentication required/
+      );
+
+      assert.equal(client.getCustomModel(), null);
+      assert.equal(client.getCustomApiKey(), null);
+    });
+
+    it('Security verification: BYOK keys are never stored in localStorage or sessionStorage', () => {
+      const sensitiveKey = 'AIzaSyHighSecurityKey12345';
+      client.setCustomApiKey(sensitiveKey);
+
+      // Verify localStorage is completely clean of the key
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          const val = localStorage.getItem(key);
+          assert.equal(val?.includes(sensitiveKey), false, 'Key must not be in localStorage');
+        }
+      }
+
+      // Verify sessionStorage is completely clean of the key
+      if (typeof sessionStorage !== 'undefined') {
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          const val = sessionStorage.getItem(key);
+          assert.equal(val?.includes(sensitiveKey), false, 'Key must not be in sessionStorage');
+        }
+      }
     });
   });
 });

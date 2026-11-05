@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 import logging
 
 from app.core.config import settings
@@ -63,6 +63,41 @@ def validate_document_id(doc_id: str) -> str:
     return clean_id
 
 
+def resolve_model_and_key(
+    owner_uid: str,
+    x_gemini_model: Optional[str] = None,
+    x_gemini_api_key: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """
+    Resolves target Gemini model and optional BYOK key for an authenticated AI request.
+    Validates model against explicit backend allowlist.
+    Ensures empty custom API keys are rejected.
+    """
+    if x_gemini_model:
+        clean_model = x_gemini_model.strip()
+        if clean_model not in settings.SUPPORTED_GEMINI_MODELS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid model '{clean_model}'. Supported models are: {', '.join(settings.SUPPORTED_GEMINI_MODELS)}.",
+            )
+        target_model = clean_model
+    else:
+        user_prefs = firebase_service.get_user_preferences(owner_uid=owner_uid)
+        target_model = user_prefs.get("selected_model", settings.GEMINI_MODEL)
+
+    byok_key = None
+    if x_gemini_api_key is not None:
+        clean_key = x_gemini_api_key.strip()
+        if not clean_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Custom Gemini API key cannot be empty or whitespace.",
+            )
+        byok_key = clean_key
+
+    return target_model, byok_key
+
+
 @router.post(
     "/analyze",
     response_model=MeetingAnalysisResponse,
@@ -77,6 +112,8 @@ def validate_document_id(doc_id: str) -> str:
 def analyze_meeting_transcript(
     request: MeetingAnalysisRequest,
     current_user: AuthenticatedUser = Depends(require_rate_limit("analyze", lambda: settings.RATE_LIMIT_ANALYZE)),
+    x_gemini_api_key: Optional[str] = Header(default=None, alias="X-Gemini-API-Key"),
+    x_gemini_model: Optional[str] = Header(default=None, alias="X-Gemini-Model"),
 ) -> MeetingAnalysisResponse:
     """
     Endpoint to process a meeting transcript into structured meeting insights
@@ -88,10 +125,18 @@ def analyze_meeting_transcript(
             detail="Meeting transcript cannot be empty or contain only whitespace.",
         )
 
+    target_model, byok_key = resolve_model_and_key(
+        owner_uid=current_user.uid,
+        x_gemini_model=x_gemini_model,
+        x_gemini_api_key=x_gemini_api_key,
+    )
+
     try:
         insights = gemini_service.analyze_transcript(
             transcript=request.transcript,
             title=request.title,
+            model=target_model,
+            api_key=byok_key,
         )
 
         # Persist to Firestore if configured, bound to the authenticated user's UID
@@ -113,12 +158,22 @@ def analyze_meeting_transcript(
         return insights
     except GeminiConfigError as e:
         logger.error(f"Gemini configuration error: {e}")
+        if byok_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid custom Gemini API key. Please check your BYOK credentials.",
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except GeminiAnalysisError as e:
         logger.error(f"Gemini analysis error: {e}")
+        if byok_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gemini API request failed using provided custom API key. Please verify quota and permissions.",
+            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream AI service is temporarily unavailable. Please try again."),
@@ -492,6 +547,8 @@ def export_saved_meeting_pdf(
 def submit_clarifications(
     request: MeetingClarificationRequest,
     current_user: AuthenticatedUser = Depends(require_rate_limit("clarify", lambda: settings.RATE_LIMIT_CLARIFY)),
+    x_gemini_api_key: Optional[str] = Header(default=None, alias="X-Gemini-API-Key"),
+    x_gemini_model: Optional[str] = Header(default=None, alias="X-Gemini-Model"),
 ) -> MeetingAnalysisResponse:
     """
     Endpoint to submit clarification answers and re-evaluate meeting analysis.
@@ -502,6 +559,12 @@ def submit_clarifications(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one clarification answer must be provided.",
         )
+
+    target_model, byok_key = resolve_model_and_key(
+        owner_uid=current_user.uid,
+        x_gemini_model=x_gemini_model,
+        x_gemini_api_key=x_gemini_api_key,
+    )
 
     # Validate clarification IDs against existing analysis
     valid_ids = {c.id for c in request.analysis.clarifications}
@@ -531,6 +594,8 @@ def submit_clarifications(
         updated_insights = gemini_service.resolve_clarifications(
             analysis=request.analysis,
             answers=request.answers,
+            model=target_model,
+            api_key=byok_key,
         )
 
         # Update in Firestore if meeting_id is provided and Firebase is configured
@@ -560,12 +625,22 @@ def submit_clarifications(
         raise
     except GeminiConfigError as e:
         logger.error(f"Gemini configuration error in submit_clarifications: {e}")
+        if byok_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid custom Gemini API key. Please check your BYOK credentials.",
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=safe_error_message(e, status.HTTP_503_SERVICE_UNAVAILABLE, "The service is temporarily unavailable."),
         )
     except GeminiAnalysisError as e:
         logger.error(f"Gemini analysis error in submit_clarifications: {e}")
+        if byok_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gemini API request failed using provided custom API key. Please verify quota and permissions.",
+            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=safe_error_message(e, status.HTTP_502_BAD_GATEWAY, "The upstream AI service is temporarily unavailable. Please try again."),

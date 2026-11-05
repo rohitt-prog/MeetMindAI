@@ -21,6 +21,10 @@ import {
   Download,
   Trash2,
   UserX,
+  Cpu,
+  Zap,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BackendConnectionState, ThemeMode, MeetingListItem } from '../types';
@@ -235,6 +239,98 @@ export const Settings: React.FC<SettingsProps> = ({
   const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState<boolean>(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
   const [deleteAccountModalError, setDeleteAccountModalError] = useState<string | null>(null);
+
+  // Model Selection State (Phase 2C)
+  const [savedModel, setSavedModel] = useState<string>('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
+  const [isLoadingPreferences, setIsLoadingPreferences] = useState<boolean>(false);
+  const [isSavingModel, setIsSavingModel] = useState<boolean>(false);
+  const [modelMessage, setModelMessage] = useState<{ text: string; isError: boolean } | null>(null);
+
+  // Bring Your Own API Key (BYOK) State
+  const [byokKeyInput, setByokKeyInput] = useState<string>('');
+  const [showKeyText, setShowKeyText] = useState<boolean>(false);
+  const [isValidatingKey, setIsValidatingKey] = useState<boolean>(false);
+  const [isKeyActive, setIsKeyActive] = useState<boolean>(Boolean(apiService.getCustomApiKey()));
+  const [byokMessage, setByokMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [showByokSection, setShowByokSection] = useState<boolean>(Boolean(apiService.getCustomApiKey()));
+
+  const fetchPreferences = useCallback(async () => {
+    setIsLoadingPreferences(true);
+    try {
+      const prefs = await apiService.getUserPreferences();
+      setSavedModel(prefs.selected_model);
+      setSelectedModel(prefs.selected_model);
+    } catch {
+      // In offline or fallback demo mode, maintain current selection
+    } finally {
+      setIsLoadingPreferences(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPreferences();
+  }, [fetchPreferences]);
+
+  const handleSaveModel = async () => {
+    setIsSavingModel(true);
+    setModelMessage(null);
+    try {
+      const res = await apiService.updateUserPreferences(selectedModel);
+      setSavedModel(res.selected_model);
+      setModelMessage({
+        text: `Model preference updated to ${res.selected_model === 'gemini-2.5-pro' ? 'Gemini 2.5 Pro' : 'Gemini 2.5 Flash'}.`,
+        isError: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update model preference.';
+      setModelMessage({ text: msg, isError: true });
+    } finally {
+      setIsSavingModel(false);
+    }
+  };
+
+  const handleCancelModel = () => {
+    setSelectedModel(savedModel);
+    setModelMessage(null);
+  };
+
+  const handleApplyByokKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setByokMessage(null);
+    const trimmed = byokKeyInput.trim();
+    if (!trimmed) {
+      setByokMessage({ text: 'Please enter a valid Gemini API key.', isError: true });
+      return;
+    }
+
+    setIsValidatingKey(true);
+    try {
+      await apiService.validateApiKey(trimmed);
+      apiService.setCustomApiKey(trimmed);
+      setIsKeyActive(true);
+      setByokKeyInput('');
+      setByokMessage({
+        text: 'Custom Gemini API key verified and active for this browser session.',
+        isError: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to validate Gemini API key.';
+      setByokMessage({ text: msg, isError: true });
+    } finally {
+      setIsValidatingKey(false);
+    }
+  };
+
+  const handleClearByokKey = () => {
+    apiService.setCustomApiKey(null);
+    setIsKeyActive(false);
+    setByokKeyInput('');
+    setByokMessage({
+      text: 'Custom API key removed. Meeting analysis will use default server credentials.',
+      isError: false,
+    });
+  };
 
   const handleConfirmDeleteAccount = async () => {
     if (!user || isDeletingAccount) return;
@@ -652,7 +748,313 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Card 3: Data Management & JSON Backup */}
+          {/* Card 3: AI Model & Customization (Phase 2C) */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                  <Cpu className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <span>AI Model & Customization</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">
+                      Phase 2C
+                    </span>
+                  </h2>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Target Gemini model selection and Bring Your Own API Key (BYOK)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={fetchPreferences}
+                disabled={isLoadingPreferences}
+                title="Refresh saved preferences"
+                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-500 dark:text-slate-400 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${isLoadingPreferences ? 'animate-spin text-indigo-500' : ''}`}
+                />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-5">
+              {/* Model Selection Options */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-2.5">
+                  Select Target Model
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {/* Option A: Gemini 2.5 Flash */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedModel('gemini-2.5-flash');
+                      setModelMessage(null);
+                    }}
+                    className={`p-4 rounded-xl border text-left transition-all relative ${
+                      selectedModel === 'gemini-2.5-flash'
+                        ? 'border-indigo-600 bg-indigo-50/40 dark:border-indigo-500 dark:bg-indigo-950/30 ring-1 ring-indigo-500/50'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-indigo-500" />
+                        Gemini 2.5 Flash
+                      </span>
+                      {selectedModel === 'gemini-2.5-flash' && (
+                        <span className="w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center">
+                          <Check className="w-2.5 h-2.5" />
+                        </span>
+                      )}
+                    </div>
+                    <span className="inline-block mt-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      Default / Recommended
+                    </span>
+                    <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      Sub-second latency, 1M token context, optimized for standard meetings and rapid turnaround.
+                    </p>
+                    {savedModel === 'gemini-2.5-flash' && (
+                      <span className="mt-3 block text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        • Saved Account Default
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Option B: Gemini 2.5 Pro */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedModel('gemini-2.5-pro');
+                      setModelMessage(null);
+                    }}
+                    className={`p-4 rounded-xl border text-left transition-all relative ${
+                      selectedModel === 'gemini-2.5-pro'
+                        ? 'border-indigo-600 bg-indigo-50/40 dark:border-indigo-500 dark:bg-indigo-950/30 ring-1 ring-indigo-500/50'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        <Cpu className="w-3.5 h-3.5 text-indigo-500" />
+                        Gemini 2.5 Pro
+                      </span>
+                      {selectedModel === 'gemini-2.5-pro' && (
+                        <span className="w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center">
+                          <Check className="w-2.5 h-2.5" />
+                        </span>
+                      )}
+                    </div>
+                    <span className="inline-block mt-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300">
+                      Higher Reasoning
+                    </span>
+                    <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      Deeper analysis for dense, multi-topic, highly technical, or structurally complex meetings.
+                    </p>
+                    {savedModel === 'gemini-2.5-pro' && (
+                      <span className="mt-3 block text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        • Saved Account Default
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Model Save / Cancel Actions */}
+              {selectedModel !== savedModel && (
+                <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80">
+                  <span className="text-xs text-slate-600 dark:text-slate-300 flex-1">
+                    Unsaved model selection: <strong>{selectedModel === 'gemini-2.5-pro' ? 'Gemini 2.5 Pro' : 'Gemini 2.5 Flash'}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCancelModel}
+                    disabled={isSavingModel}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveModel}
+                    disabled={isSavingModel}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs shadow-xs transition-colors disabled:opacity-50"
+                  >
+                    {isSavingModel ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Save Preference</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {modelMessage && (
+                <div
+                  className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                    modelMessage.isError
+                      ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-800 dark:text-rose-300'
+                      : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300'
+                  }`}
+                >
+                  {modelMessage.isError ? (
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                  )}
+                  <span>{modelMessage.text}</span>
+                </div>
+              )}
+
+              {/* BYOK Section */}
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Bring Your Own API Key (BYOK)</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Use your personal Google Gemini API key for meeting analysis
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowByokSection(!showByokSection)}
+                    className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                  >
+                    {showByokSection ? 'Hide Configuration' : isKeyActive ? 'Manage Key' : 'Configure Key'}
+                  </button>
+                </div>
+
+                {/* BYOK Status Banner */}
+                {isKeyActive && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between gap-3 text-xs text-emerald-800 dark:text-emerald-300">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>
+                        Custom BYOK key is <strong>Active</strong> in session memory ({apiService.getCustomApiKey() ? `••••${apiService.getCustomApiKey()!.slice(-4)}` : 'Active'}).
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClearByokKey}
+                      className="px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-medium transition-colors"
+                    >
+                      Remove Key
+                    </button>
+                  </div>
+                )}
+
+                {showByokSection && (
+                  <div className="space-y-3 pt-1">
+                    {/* Ephemeral Notice */}
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                      <Key className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-amber-950 dark:text-amber-100">
+                          Ephemeral Session Memory Handling
+                        </p>
+                        <p className="leading-relaxed text-[11px] text-amber-900/90 dark:text-amber-200/90">
+                          For your security, custom API keys are held exclusively in active browser memory during this session and sent directly over TLS to execute your requests.
+                          Your key is <strong>never stored</strong> in localStorage, sessionStorage, cookies, or cloud databases, and must be re-entered if you reload or close the tab.
+                        </p>
+                      </div>
+                    </div>
+
+                    <form onSubmit={handleApplyByokKey} className="space-y-2.5">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+                        Enter Gemini API Key
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showKeyText ? 'text' : 'password'}
+                          value={byokKeyInput}
+                          onChange={(e) => setByokKeyInput(e.target.value)}
+                          placeholder="AIzaSy..."
+                          autoComplete="off"
+                          spellCheck="false"
+                          disabled={isValidatingKey}
+                          className="w-full px-3.5 py-2 pr-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors disabled:opacity-50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowKeyText(!showKeyText)}
+                          tabIndex={-1}
+                          className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                        >
+                          {showKeyText ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <p className="text-[10px] text-slate-400">
+                          Backend validates key via lightweight verification probe before activation.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {isKeyActive && (
+                            <button
+                              type="button"
+                              onClick={handleClearByokKey}
+                              disabled={isValidatingKey}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                            >
+                              Clear Key
+                            </button>
+                          )}
+                          <button
+                            type="submit"
+                            disabled={isValidatingKey || !byokKeyInput.trim()}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs shadow-xs transition-colors disabled:opacity-50"
+                          >
+                            {isValidatingKey ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Verifying...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Validate & Apply Key</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+
+                    {byokMessage && (
+                      <div
+                        className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                          byokMessage.isError
+                            ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-800 dark:text-rose-300'
+                            : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300'
+                        }`}
+                      >
+                        {byokMessage.isError ? (
+                          <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                        )}
+                        <span>{byokMessage.text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Data Management & JSON Backup */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2.5">
@@ -929,7 +1331,7 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Card 4: Upcoming Capabilities (Roadmap) */}
+          {/* Card 5: Upcoming Capabilities (Roadmap) */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xs transition-colors">
             <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
@@ -946,18 +1348,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
 
             <div className="mt-5 space-y-3">
-              <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-start justify-between gap-3">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Custom Model Selection</span>
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">Phase 2C</span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Switch between Gemini 2.5 Flash, Gemini 2.5 Pro, or bring your own API key.
-                  </p>
-                </div>
-              </div>
-
               <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
@@ -1050,8 +1440,13 @@ export const Settings: React.FC<SettingsProps> = ({
                 </div>
                 <div className="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800/80">
                   <span className="text-slate-500 dark:text-slate-400">Target Model</span>
-                  <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold">
-                    Gemini 2.5 Flash
+                  <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold flex items-center gap-1.5">
+                    {savedModel === 'gemini-2.5-pro' ? 'Gemini 2.5 Pro' : 'Gemini 2.5 Flash'}
+                    {isKeyActive && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 text-[9px] font-sans font-medium">
+                        BYOK
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-1.5">
