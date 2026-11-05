@@ -1246,6 +1246,56 @@ describe('Frontend API Service & State Integration Tests', () => {
     assert.equal(capturedBody.analysis.open_follow_ups.length, 1);
   });
 
+  it('PDF Export Security: exportMeetingPdf and exportSavedMeetingPdf never forward BYOK key or model headers', async () => {
+    client.setCustomModel('gemini-2.5-pro');
+    client.setCustomApiKey('AIzaSySecretBYOKKey999Phase2D');
+
+    const mockPdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]);
+    let capturedPostHeaders = null;
+    let capturedGetHeaders = null;
+
+    globalThis.fetch = async (url, options) => {
+      if (options.method === 'POST') {
+        capturedPostHeaders = options.headers;
+      } else if (options.method === 'GET') {
+        capturedGetHeaders = options.headers;
+      }
+      return new Response(mockPdfBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'attachment; filename="meetmind_report.pdf"',
+        },
+      });
+    };
+
+    // 1. Test POST /api/meetings/export/pdf
+    await client.exportMeetingPdf({
+      title: 'Security Sync',
+      analysis: {
+        summary: 'Testing BYOK exclusion in PDF export.',
+        discussion_points: [],
+        decisions: [],
+        action_items: [],
+        clarification_required: false,
+        clarifications: [],
+      },
+    });
+
+    assert.ok(capturedPostHeaders);
+    assert.equal(capturedPostHeaders['X-Gemini-API-Key'], undefined, 'Must not send X-Gemini-API-Key in exportMeetingPdf');
+    assert.equal(capturedPostHeaders['X-Gemini-Model'], undefined, 'Must not send X-Gemini-Model in exportMeetingPdf');
+
+    // 2. Test GET /api/meetings/{id}/export/pdf
+    await client.exportSavedMeetingPdf('m_saved_123');
+
+    assert.ok(capturedGetHeaders);
+    assert.equal(capturedGetHeaders['X-Gemini-API-Key'], undefined, 'Must not send X-Gemini-API-Key in exportSavedMeetingPdf');
+    assert.equal(capturedGetHeaders['X-Gemini-Model'], undefined, 'Must not send X-Gemini-Model in exportSavedMeetingPdf');
+
+    client.clearCustomModelAndKey();
+  });
+
   it('Delete Meeting: sends DELETE request and returns confirmation', async () => {
     let capturedUrl = '';
     let capturedMethod = '';
