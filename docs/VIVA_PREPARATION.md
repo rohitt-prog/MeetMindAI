@@ -14,9 +14,9 @@ This guide is designed for Computer Science & Engineering (AI/ML/Software Engine
 >
 > *The platform implements end-to-end multi-user security with **Firebase Authentication** on the client, cryptographic **Firebase Admin SDK** Bearer token verification on the backend, and strict **`owner_uid` document isolation** in Cloud Firestore. Resource exhaustion and billable API abuse are prevented via a distributed sliding-window rate limiter powered by an **atomic Redis Lua script** and defensive payload-bounding middleware.*
 >
-> *Finally, MeetMind AI compiles publication-grade, multi-page meeting reports via a server-side **ReportLab PDF engine** using an in-memory two-pass `NumberedCanvas`.*
+> *Finally, MeetMind AI compiles publication-grade, multi-page meeting reports via a server-side **ReportLab PDF engine** with branded executive styling, and provides enterprise data portability via a validated **JSON backup and restore engine**.*
 >
-> *The system is built with React 18, Vite, TypeScript, and Tailwind CSS on the frontend, and Python 3.11 with FastAPI on the backend, validated by 99 automated backend tests and 32 frontend unit tests."*
+> *The system is built with React 18, Vite, TypeScript, and Tailwind CSS on the frontend, and Python 3.11 with FastAPI on the backend, validated by 154 automated backend tests (153 passed, 1 skipped) and 85 frontend unit and integration tests as of our Phase 5 QA baseline."*
 
 ---
 
@@ -170,6 +170,70 @@ ReportLab generates flowables in a single pass by default. However, executive re
 - It overrides `showPage()` to stash page states and delays painting until `save()` is invoked, where the exact total page count is known.
 - All table cells encapsulate `Paragraph` objects rather than raw strings, ensuring multi-line text wraps gracefully without overflowing page margins.
 
+### 5.4 Ephemeral Bring-Your-Own-Key (BYOK) Security Architecture
+To allow users to select advanced models (`gemini-2.5-pro`) and utilize their personal API quotas without exposing credentials:
+1. **In-Memory Credential Lifecycle**: The user inputs their Gemini API key in the frontend Settings dialog. The key is verified via `POST /api/preferences/validate-key` (which makes a lightweight token counting call without logging or saving the key).
+2. **Zero Storage Persistence**: The key is stored **exclusively in JavaScript memory** within the `apiService` singleton closure. It is **never** written to `localStorage`, `sessionStorage`, browser cookies, or IndexedDB. When the browser tab is closed or refreshed, the key evaporates automatically.
+3. **Per-Request Header Injection**: Authenticated analysis and clarification calls transmit the key over TLS via the `X-Gemini-API-Key` request header (along with optional `X-Gemini-Model`).
+4. **Backend Per-Request Isolation**: The FastAPI dependency `resolve_model_and_key()` extracts the header, validates the model against `SUPPORTED_GEMINI_MODELS`, and passes the key to a transient `google-genai` client. Client instances are created per-call and are never cached globally or shared across requests.
+5. **No Database Persistence & Zero Logs**: The key is never persisted to Cloud Firestore, and application loggers explicitly redact or omit credential headers from logs, diagnostics, and stack traces.
+6. **Immediate Purge on 401 Unauthorized**: If an API request encounters an unrecoverable 401 session expiry, `apiService.setOnUnauthorized()` triggers `clearCustomModelAndKey()`, wiping in-memory credentials immediately to protect users on public or shared terminals.
+7. **BYOK vs. Default Server Key**: The default server key (`GEMINI_API_KEY` in `backend/.env`) provides a zero-setup out-of-the-box experience using `gemini-2.5-flash`. If a user specifies BYOK, the backend executes exclusively with their key. If the BYOK key is invalid or quota-exhausted, the backend returns an explicit `HTTP 400 Bad Request` and **never silently falls back to the server key**, preventing unexpected billing on the server owner's account.
+
+### 5.5 Publication-Grade ReportLab PDF Generation
+1. **Flow Architecture**: When the user requests a PDF (`POST /api/meetings/export/pdf` or `GET /api/meetings/{id}/export/pdf`), the backend validates ownership and invokes `PdfService.generate_meeting_pdf()`. The engine compiles ReportLab flowables into an in-memory `io.BytesIO` buffer and streams it with `Content-Type: application/pdf` and safe attachment headers (`meetmind_{slug}.pdf`). No temporary files touch the server disk.
+2. **Executive Styling & Branding**:
+   - MeetMind AI logo badge and indigo header with document metadata grid (meeting ID, generated timestamp, status badge).
+   - Executive Summary callout card with a left-accent Indigo border.
+   - Discussion points rendered with bullet indicators.
+   - Confirmed decisions rendered with verified checkmark icons.
+   - Action Items table featuring a Slate 800 header, alternate row background shading, explicit column widths, and automatic paragraph cell wrapping.
+   - Ambiguity audit trail detailing category badges, transcript quotes, clarification questions, and historical user answers.
+   - Cleanly partitioned source transcript rows that split across page breaks without layout crashes.
+3. **Type 1 Helvetica Font Safety & Glyph Sanitization**:
+   - Standard PDF fonts (Helvetica, Helvetica-Bold) use Type 1 Latin-1 encoding, which does not support Unicode characters like `\u2713` (checkmark), `\u2022` (bullet), or `\u2014` (em-dash). Feeding these directly to ReportLab causes a fatal `UnicodeEncodeError`.
+   - `PdfService` sanitizes dynamic strings, translating Unicode checkmarks to `[x]`, bullets to `*`, and em-dashes to `--`.
+   - User content passed to ReportLab `Paragraph` XML markup is escaped with `xml.sax.saxutils.escape()` to avoid XML parsing errors, while plain `drawString` calls avoid double-escaping so literal entities (like `&amp;`) are not rendered.
+4. **Why Backend PDF Generation?**:
+   - Generates deterministic, pixel-perfect, publication-grade output across all operating systems and browsers.
+   - Prevents shipping heavy JavaScript PDF compilation packages (e.g. 500+ kB for jsPDF or pdfmake) to the client bundle.
+   - Ensures data integrity and multi-tenant security verification on the server before report generation.
+
+### 5.6 Cloud Firestore Multi-Tenant Security & Ownership Isolation
+1. **Cryptographic Token Verification**: The frontend acquires a Google-signed Firebase ID token (JWT) and passes it in the `Authorization: Bearer <token>` header. The backend dependency `get_current_user` calls `firebase_admin.auth.verify_id_token()`, extracting the verified `uid`. The backend **never** trusts client-supplied UIDs.
+2. **Strict Query & Document Scoping**:
+   - Listing queries enforce `.where(filter=FieldFilter("owner_uid", "==", current_user.uid))`.
+   - Single document operations (GET, DELETE, clarify update, PDF export) check `doc.owner_uid == current_user.uid`.
+   - Access to another user's document returns `HTTP 404 Not Found` rather than `403 Forbidden` to prevent document ID enumeration.
+3. **Quarantine of Missing or Blank Owners**:
+   - Legacy records or malformed documents in Firestore with missing or blank `owner_uid` are **never** treated as caller-owned.
+   - In `restore_user_backup()`, ownership check strictly requires `existing_owner == clean_uid` where both are valid matching non-empty strings. Unowned records are never overwritten by any user.
+4. **ID Collision Prevention**: Meeting IDs follow the convention `m_{timestamp}_{hex}`. When saving or restoring records, candidate IDs are verified against both live Firestore documents and reserved batch IDs.
+
+### 5.7 Account Deletion, Cascade Purge & JSON Backup/Restore
+1. **Cascading Account and Data Deletion Protocol**:
+   - User confirms deletion by typing the exact phrase `DELETE MY ACCOUNT` in `DeleteAccountModal`.
+   - `DELETE /api/account` triggers `FirebaseService.delete_user_account_and_data(owner_uid)`.
+   - The backend performs phased deletions across all documents in `meetings` and `user_preferences` matching `owner_uid == current_user.uid`.
+   - Deletions are chunked into batches of up to 400 operations (`BATCH_SIZE = 400`, within Firestore's 500-write limit), committing each batch atomically. Note that while each individual batch is atomic, operations spanning multiple batches or bridging Firestore and Firebase Auth are phased sequentially; if a later batch fails, prior committed batches remain deleted, and the exact count of deleted records is reported.
+   - **Sequencing Guarantee**: Only after all database records are successfully wiped does the backend delete the Firebase Auth user via `auth.delete_user(uid)`. If database deletion fails midway, the authentication user remains active so the user can re-authenticate and retry without leaving orphaned records.
+2. **Structured JSON Backup (Schema v1.0)**:
+   - `GET /api/meetings/backup` streams all meetings owned by `current_user.uid`.
+   - Formats a sanitized JSON document containing schema `version: "1.0"`, `backup_type: "meetmind_ai_meetings_backup"`, ISO timestamp, `BackupUserSummary` (`uid`, `email`, `is_demo_user`), `BackupMetrics` (`total_meetings`, `total_action_items`, `total_decisions`), and complete meeting records.
+   - Credentials, BYOK keys, and system secrets are strictly excluded.
+3. **Validated Restore with Conflict Strategies**:
+   - `POST /api/meetings/restore` requires schema validation and verifies that `len(payload.meetings) == metrics.total_meetings`.
+   - If validation fails, the entire import is rejected with `HTTP 400 Bad Request` before any database writes occur (all-or-nothing validation guarantee).
+   - Validated documents are buffered and committed in a single atomic Firestore batch (`batch.commit()`).
+   - Restored records are strictly re-stamped with `owner_uid = current_user.uid`.
+   - **Conflict Strategy `skip`** *(default)*: Preserves existing Firestore documents; any colliding meeting ID triggers the generation of a fresh unique meeting ID.
+   - **Conflict Strategy `overwrite`**: Overwriting is permitted **only** if the existing document is verified in Firestore as owned by the caller (`doc.owner_uid == current_user.uid`).
+   - **Cross-Tenant Collision Protection**: If a meeting ID from the backup matches an existing Firestore document belonging to a *different* user or an unowned document, the backend refuses to overwrite it and automatically allocates a fresh unique ID.
+4. **Safe Unique ID Allocation (`_allocate_unique_meeting_id`)**:
+   - Implements bounded candidate generations with up to 15 total attempts (10 standard timestamp-based attempts followed by 5 high-entropy full-UUID fallback attempts).
+   - Checks candidate collision against both live Firestore documents and reserved batch IDs.
+   - If Firestore `.get()` raises an exception, the candidate is discarded and a `FirebaseOperationError` is propagated rather than returning an unverified candidate.
+
 ---
 
 ## 6. Top 30 Viva Questions & Model Answers
@@ -313,9 +377,9 @@ This updates the document without altering its ID or creating extra rows.
 
 #### Q26: What is the testing strategy for the project?
 **Answer:** We follow a test-driven, pyramid-based testing strategy:
-- **Backend (Pytest)**: 99 automated tests covering route validations, schema invariants, health endpoints, CORS, mocked Gemini extraction, ambiguity detection, clarification merging, Firestore persistence, PDF compiling, Bearer auth verification, user ownership isolation, Redis Lua rate limiting, request size limits, and security headers.
-- **Frontend (Node Test Runner)**: 32 automated tests covering API client methods, 404 fallbacks, timeout aborts, Bearer token injection, single 401 retry, demo authentication, 429 rate limit error parsing, and payload bounds.
-- **Zero-Credential CI**: All tests use mocked Gemini and Firestore clients, executing in < 1 second without live credentials or internet access.
+- **Backend (Pytest)**: 154 automated tests (153 passed, 1 skipped when external Redis is offline as of Phase 5 QA baseline) covering route validations, schema invariants, health probes, CORS, mocked Gemini extraction, ambiguity classification, clarification merging, Firestore persistence, bulk deletions, account cascade deletions, model selection & BYOK validation, JSON backup export, schema v1.0 restore validation, conflict resolution, ID collision handling, ReportLab PDF compiling, Bearer auth verification, user ownership isolation, Redis Lua rate limiting, request size limits, and security headers.
+- **Frontend (Node Test Runner)**: 85 automated tests via `node:test` covering API client contracts, 404 fallbacks, timeout aborts, Bearer token injection, single 401 retry, demo authentication, immediate BYOK credential purge on 401, theme resolution, bulk deletion modal flows, account deletion flows, backup export/restore flows, 429 rate limit error parsing with `Retry-After`, and payload bounds.
+- **Zero-Credential CI**: All tests use mocked Gemini and Firestore clients, executing cleanly in zero-credential environments without live API keys or cloud dependencies.
 
 #### Q27: How is CORS configured securely in production?
 **Answer:** In [`backend/app/main.py`](backend/app/main.py), we register FastAPI's `CORSMiddleware`, restricting allowed origins to `settings.CORS_ORIGINS`. In production mode, `validate_production_configuration()` verifies that wildcard origins (`*`) and localhost addresses are strictly forbidden when credentials are enabled.
@@ -326,19 +390,81 @@ This updates the document without altering its ID or creating extra rows.
 2. `safe_error_message()` masks raw stack traces and internal database errors for 500, 502, and 503 HTTP responses.
 3. `sanitize_redis_url()` redacts passwords and sensitive query tokens from logs.
 4. Unauthorized attempts to access other users' meetings return 404 rather than 403.
+5. User API keys (BYOK) are never written to logs or error messages.
 
 #### Q29: What are the current architectural limitations of MeetMind AI?
 **Answer:**
-1. **Plaintext Transcripts**: Currently expects pre-recorded text transcripts; live microphone audio streaming or real-time speech-to-text is not yet integrated.
-2. **Single-Owner Meetings**: Each meeting belongs to an individual user UID; team-based shared workspaces or collaborative multi-user editing are not yet supported.
-3. **Standard PDF Fonts**: Utilizes standard PDF Type 1 fonts (`Helvetica`, `Courier`) for universal cross-platform compatibility rather than embedded custom TrueType web fonts.
+1. **Text-Based Transcript Input**: Currently operates on text-based conversational transcripts; live audio streaming and speech-to-text diarization are left for future streaming phases.
+2. **Single-Owner Meeting Isolation**: Meetings are strictly owned by individual user accounts; multi-tenant collaborative team workspaces with shared editing permissions are not yet implemented.
+3. **Standard PDF Fonts**: Utilizes standard PDF Type 1 fonts (`Helvetica`) for universal cross-platform portability rather than custom TrueType web fonts.
 
 #### Q30: What future enhancements would you propose?
 **Answer:**
-1. **Real-Time Streaming Transcription**: Integrating Google Gemini Live API or Whisper for real-time live meeting audio transcription.
-2. **Third-Party Project Management Webhooks**: Direct export integrations to sync extracted action items directly to Linear, Jira, GitHub Issues, or Asana.
-3. **Team Workspaces & RBAC**: Introducing organizations and team workspaces with Role-Based Access Control (Admin, Editor, Viewer).
-4. **Speaker Diarization & Calendar Synchronization**: Automatic speaker attribution and calendar sync to send personalized follow-up action items directly to meeting attendees.
+1. **Real-Time Streaming Audio Transcription**: Integrating the Gemini Live API or Whisper for direct microphone capture.
+2. **Third-Party Project Management Webhooks**: Direct integrations to push action items into Linear, Jira, GitHub Issues, or Asana.
+3. **Team Workspaces & RBAC**: Introducing organizations with Role-Based Access Control (Admin, Editor, Viewer).
+4. **Calendar & Email Automation**: Automatic attendee detection and calendar sync to email personalized action items to meeting participants.
+
+---
+
+### Category G: Model Selection & Ephemeral BYOK Security
+
+#### Q31: How does user model selection and Bring-Your-Own-Key (BYOK) work?
+**Answer:**
+1. **Model Selection**: Users can choose between `gemini-2.5-flash` (fast, economical) and `gemini-2.5-pro` (deeper reasoning). The preference is persisted in Cloud Firestore (`user_preferences` collection) keyed by verified UID.
+2. **Ephemeral BYOK**: Users can optionally provide their own personal Gemini API key. The key is verified via `POST /api/preferences/validate-key` (which counts tokens on a minimal string) and stored **strictly in JavaScript memory** within the `apiService` singleton.
+3. **Transmission**: The key is attached as an `X-Gemini-API-Key` header on `/analyze` and `/clarify` requests. The backend creates a transient client, completes the request, and discards the client without caching.
+4. **Zero-Trace Guarantee**: The key is never written to `localStorage`, cookies, or Firestore, never printed in server logs, and immediately purged if an unauthorized (401) response occurs.
+
+#### Q32: Why does the backend reject invalid BYOK keys with 400 instead of falling back to the server key?
+**Answer:** Silent fallback would violate user expectations and incur unexpected costs on the server operator's billable Gemini quota. If a user provides an invalid, revoked, or quota-exhausted BYOK key, the backend explicitly raises `HTTP 400 Bad Request` informing the user that their key failed. This ensures strict credential isolation and transparent billing accountability.
+
+#### Q33: How does the client protect against credential leakage when a session expires or returns 401?
+**Answer:** When an API request encounters `401 Unauthorized` and token refresh cannot recover the session, `apiService` invokes its `onUnauthorized()` callback. In `AuthContext.tsx`, this immediately triggers `clearCustomModelAndKey()`, resetting in-memory BYOK credentials and model overrides to null. This prevents credentials from remaining in memory on shared or public workstations after a user is logged out.
+
+---
+
+### Category H: Portability, Cascade Deletion & Data Protection
+
+#### Q34: How does MeetMind AI implement user account and data cascade deletion?
+**Answer:** When a user initiates account deletion (`DELETE /api/account`):
+1. The user must type `DELETE MY ACCOUNT` in a confirmation modal.
+2. The backend performs a phased cascade deletion: first deleting all documents in `meetings` and `user_preferences` matching `owner_uid == current_user.uid`.
+3. Meeting deletions are executed in batched writes of up to 400 documents per batch (`BATCH_SIZE = 400`, within Firestore's 500-write limit). While each individual batch is committed atomically, operations spanning multiple batches are executed sequentially.
+4. Only after all database documents are successfully deleted does the backend call `auth.delete_user(uid)`.
+5. If database deletion encounters a failure midway, the authentication user is deliberately preserved and the exact number of deleted records is reported so the user can re-authenticate and retry without leaving orphaned records.
+
+#### Q35: What is the structure of the JSON backup file and how is it validated?
+**Answer:**
+1. **Schema v1.0**: The exported JSON includes `version: "1.0"`, `backup_type: "meetmind_ai_meetings_backup"`, an ISO timestamp, a sanitized `user` summary (`uid`, `email`, `is_demo_user`), `metrics` (`total_meetings`, `total_action_items`, `total_decisions`), and an array of complete `MeetingDetailResponse` records.
+2. **All-or-Nothing Invariants**: During restore (`POST /api/meetings/restore`), Pydantic validates structural types, and the service verifies that `len(meetings) == metrics.total_meetings`. If any check fails, the entire request is rejected with `HTTP 400 Bad Request` before any database mutations occur.
+
+#### Q36: Explain the difference between `skip` and `overwrite` conflict strategies during JSON restore.
+**Answer:**
+- **`skip` (default)**: Prioritizes data preservation. If a meeting ID from the backup already exists in Firestore, the existing record is left untouched, and the restored meeting is allocated a fresh, unique meeting ID.
+- **`overwrite`**: Updates existing records in-place, but **only** if the existing document is verified in Firestore as owned by the current caller (`existing_owner == current_user.uid`).
+
+#### Q37: How does MeetMind AI prevent a user from overwriting another user's meeting during backup restore?
+**Answer:** In `FirebaseService.restore_user_backup()`, before overwriting any existing meeting ID, the backend queries Firestore to inspect the document's `owner_uid`. If the document belongs to a different user, or has a missing/empty owner, the service refuses to overwrite it, even if `conflict_strategy="overwrite"`. Instead, it automatically routes the candidate to `_allocate_unique_meeting_id()` to generate a fresh, collision-free meeting ID for the imported record, guaranteeing multi-tenant security.
+
+#### Q38: How does ReportLab handle Unicode checkmarks and bullets without throwing font encoding exceptions?
+**Answer:** Built-in ReportLab Type 1 fonts (`Helvetica`) use Latin-1 encoding, which lacks modern Unicode glyphs like `\u2713` (checkmark), `\u2022` (bullet), and `\u2014` (em-dash). If passed directly, ReportLab raises `UnicodeEncodeError`. MeetMind AI's `PdfService` pre-processes dynamic text, sanitizing Unicode checkmarks into safe ASCII `[x]`, bullets into `*`, and em-dashes into `--`. Additionally, dynamic text in `Paragraph` flowables is safely escaped using `xml.sax.saxutils.escape()` to prevent XML parsing syntax errors, while plain `drawString` text avoids XML entity escaping so raw entities (e.g., `&amp;`) are not printed.
+
+#### Q39: How does the ID allocation engine prevent infinite loops and collisions?
+**Answer:** The helper `_allocate_unique_meeting_id()` implements bounded retries with up to 15 total attempts (10 standard timestamp-based attempts followed by 5 high-entropy full-UUID fallback attempts). In each attempt, it generates a candidate ID (`m_{timestamp}_{hex}`), checks for existence in Cloud Firestore via `doc_ref.get().exists`, and checks against in-flight `reserved_ids` within the current restore batch. If a lookup raises an operational exception (e.g. database network error), it immediately raises `FirebaseOperationError` rather than returning an unverified candidate.
+
+#### Q40: What are the exact per-user rate limits across all MeetMind AI endpoints?
+**Answer:**
+- `POST /api/meetings/analyze`: 10 requests / minute
+- `POST /api/meetings/clarify`: 10 requests / minute
+- `GET/POST /api/meetings/.../export/pdf`: 20 requests / minute
+- `DELETE /api/meetings` (bulk delete): 5 requests / minute
+- `DELETE /api/account` (account deletion): 5 requests / minute
+- `GET/PUT /api/preferences` & `/validate-key`: 30 requests / minute
+- `GET /api/meetings/backup`: 10 requests / minute
+- `POST /api/meetings/restore`: 5 requests / minute
+
+All limits are enforced per-user using sliding windows backed by atomic Redis Lua scripts (with in-memory fallback in development).
 
 ---
 
@@ -354,33 +480,44 @@ During your evaluation or lab demonstration, follow this step-by-step workflow:
 2. **Verify Backend Status**:
    - Point out the real-time heartbeat connection pill in the top header (`Backend Ready`).
    - Open `/docs` in a browser tab to show the OpenAPI interactive contract.
-3. **Load Sample Transcript & Analyze**:
+3. **Model Selection & Ephemeral BYOK**:
+   - Click the gear/settings icon in the top header to open the `Settings` modal.
+   - Demonstrate switching between `gemini-2.5-flash` and `gemini-2.5-pro`.
+   - Show the BYOK key input with the `"Validate Key"` action.
+   - Point out the API Rate Limits diagnostics card displaying active sliding-window quotas.
+4. **Load Sample Transcript & Analyze**:
    - In the Workspace, click the `"Load Sample Transcript"` preset.
    - Point out the live character and word counters.
    - Give the meeting a title: *"Sprint Planning & Security Review"*.
    - Click `"Analyze Transcript"`.
    - Observe the multi-stage animated progress indicator (`Parsing dialogue`, `Extracting deliverables`, `Validating ambiguities`).
-4. **Inspect Generated Intelligence & Anti-Hallucination**:
+5. **Inspect Generated Intelligence & Anti-Hallucination**:
    - Review Executive Summary, Discussion Topics, and Confirmed Decisions.
    - Highlight Action Items: tasks with explicit assignees display green owner badges (e.g., `Alex`), while tasks with missing owners display amber `Unassigned` badges without hallucinated names.
    - Point out open follow-ups vs. immediate clarification questions.
-5. **Demonstrate Ambiguity Clarification**:
+6. **Demonstrate Ambiguity Clarification**:
    - Scroll to the Ambiguity section. Point out the category badge (e.g. `OWNERSHIP`).
    - Type a concrete resolution: *"David from Infrastructure will provision staging access by tomorrow 10 AM"*.
    - Click `"Submit Clarification"`.
    - Show that the target action item updates with `David` and `Tomorrow 10 AM`, while the ambiguity flips to `RESOLVED` with a green checkmark.
-6. **Verify Multi-User Isolation & History**:
+7. **Verify Multi-User Isolation & History**:
    - Click the `"History"` navigation tab in the sidebar.
    - Show the newly persisted meeting card in the history grid with its timestamp and task count.
    - Open the Firebase Console in a browser tab to show the document in the `meetings` collection with its `owner_uid` attribute.
-7. **Demonstrate Meeting Deletion**:
-   - On a meeting card in History, click the red trash icon.
-   - Show the soft confirmation dialog (`DeleteMeetingModal`).
-   - Confirm deletion and show that the card is removed from the UI and Firestore immediately.
-8. **Export Executive PDF Report**:
+8. **Export Executive Branded PDF Report**:
    - Reopen a meeting and click `"Export PDF"` in the results header.
    - Open the downloaded PDF in Acrobat / Preview:
      - Show the MeetMind AI executive branding and metadata grid.
+     - Show the highlighted Executive Summary callout card with Indigo accent bar.
      - Show the action items table with alternate row shading and badges.
      - Show the clarification audit log.
      - Show `"Page 1 of X"` running footers and running headers.
+9. **Demonstrate JSON Backup & Restore**:
+   - In the History tab or Settings, click `"Export JSON Backup"`.
+   - Open the downloaded `.json` file to show schema v1.0, user metadata, and meeting details.
+   - Click `"Restore Backup"`, upload the file, and select the conflict strategy (`Skip Existing` or `Overwrite`).
+   - Verify that restored records appear in the history list cleanly.
+10. **Demonstrate Bulk Deletion or Account Deletion**:
+    - Click `"Delete All Meetings"` in Settings.
+    - Show that typing anything other than `DELETE ALL MEETINGS` keeps the confirmation button disabled.
+    - Alternatively, show the `DeleteAccountModal` requiring `DELETE MY ACCOUNT` with explicit cascade warning.
